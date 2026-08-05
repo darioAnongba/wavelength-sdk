@@ -43,4 +43,13 @@ export const RUNTIME_ASSET_FILES: readonly string[] =
  * edit by hand. CI's runtime-pin job fails when this table drifts from the
  * assets attached to the pinned wavelength release.
  */
-export const RUNTIME_ASSET_DIGESTS: Readonly<Record<string, string>> = {};
+export const RUNTIME_ASSET_DIGESTS: Readonly<Record<string, string>> = {
+  'wavewalletdk.wasm': 'sha256-FlaDCwfNtrBPNa4Jw5o96BRWn00HQEm+PwolBTcMiaI=',
+  'wavewalletdk.wasm.gz': 'sha256-jkLzhJPireXwaeUwiHwQCyTLXaQE38ew61TtBkzXpTk=',
+  'wasm_exec.js': 'sha256-DJSfSZb5qJaY5LXFht4yJJw7abe6rbZNIgBzzASsuhQ=',
+  'sqlite-bridge.js': 'sha256-WvlgAYAAemwc55zlPx1L2YPDyrx1J2HXe0Sf5RKhcGY=',
+  'sqlite-worker.js': 'sha256-ddNoKARRiAtefqxLvOfRotkLFUZzStZ4PZ2HEt3aN+k=',
+  'sqlite3.js': 'sha256-zrflgDHuusFRxaA3S8i7gt/2IhusVZR2YgEafLSFusk=',
+  'sqlite3.wasm': 'sha256-TdUvrfXXbgq+424HRBuqK1OnYNFZHTuhIA7KiOEegsY=',
+  'sqlite3-opfs-async-proxy.js': 'sha256-TqK8vXFbDVYIn8hx6iQfjFmF2GadHd7Kq01WqNqAbOk=',
+};

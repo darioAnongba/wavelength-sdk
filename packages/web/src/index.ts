@@ -151,7 +151,11 @@ export { defaultConfig } from './config.ts';
 
 export { MainThreadWavelengthClient } from './clients/main.ts';
 
-export { RUNTIME_ASSETS, RUNTIME_ASSET_FILES } from './runtime-manifest.ts';
+export {
+  RUNTIME_ASSETS,
+  RUNTIME_ASSET_FILES,
+  RUNTIME_ASSET_DIGESTS,
+} from './runtime-manifest.ts';
 
 // Re-export the core contract so a non-React consumer can import the client and
 // every type/enum from this one package, the way wavelength-react already does.

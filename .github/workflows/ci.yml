@@ -49,6 +49,7 @@ jobs:
       # local build while the release was still a draft.
       - name: Verify pinned digests match the release assets
         run: |
+          set -o pipefail
           VERSION="$(node scripts/runtime-version.mjs)"
           URL="https://github.com/lightninglabs/wavelength/releases/download/$VERSION/Wavewalletdk.wasm.tar.gz"
           TMP="$(mktemp -d)"

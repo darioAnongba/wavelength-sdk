@@ -20,6 +20,10 @@ import {
   isRuntimeAssetMessage,
 } from '../runtime.ts';
 import {
+  isRuntimeIntegrityMessage,
+  resolveIntegrityDigests,
+} from '../integrity.ts';
+import {
   RuntimeLock,
   NO_RUNTIME_LEASE,
   isNearMissLockMessage,
@@ -40,6 +44,9 @@ type WorkerControlMethod = '$ready' | '$startActivity' | '$stopActivity';
 function workerErrorCode(message: string, method: string): WavelengthErrorCode {
   if (method === 'start' && isWalletLockedMessage(message)) {
     return 'wallet_locked';
+  }
+  if (isRuntimeIntegrityMessage(message)) {
+    return 'asset_integrity_failed';
   }
   if (isRuntimeAssetMessage(message)) {
     return 'asset_load_failed';
@@ -117,9 +124,11 @@ export class WorkerWavelengthClient extends BaseWavelengthClient {
       }
     };
 
-    // Hand the runtime base URL (and debug flag) to the worker before any RPC;
-    // the fingerprinted worker URL can't carry them as query params, so they
-    // arrive as the first message (see the worker's $init handler).
+    // Hand the runtime base URL, debug flag, and pinned digest table to the
+    // worker before any RPC; the fingerprinted worker URL can't carry them as
+    // query params, so they arrive as the first message (see the worker's
+    // $init handler). A null table disables verification (runtimeIntegrity:
+    // false).
     worker.postMessage({
       $init: {
         runtimeBaseUrl: base,
@@ -131,6 +140,7 @@ export class WorkerWavelengthClient extends BaseWavelengthClient {
         runtimeCache: options.runtimeCache ?? true,
         debug: options.debug ?? false,
         performance: Boolean(options.onPerformance),
+        assetDigests: resolveIntegrityDigests(options.runtimeIntegrity),
       },
     });
     this.runtimeExited = false;

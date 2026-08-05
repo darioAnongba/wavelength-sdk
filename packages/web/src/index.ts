@@ -33,6 +33,12 @@ export type WebClientOptions = {
    * worker its bundler emits from new URL('../wavewalletdk-worker.js',
    * import.meta.url); supply this to point at a custom-hosted copy.
    * runtimeBaseUrl is still sent to the worker regardless of this override.
+   * The worker performs runtime integrity verification, so serve any custom
+   * copy from your app origin rather than the runtime asset host; an asset
+   * host that also serves the verifier defeats the verification. Keep a
+   * custom copy in sync with the installed SDK version: a copy predating
+   * runtime integrity ignores the digest table this client sends it and
+   * performs no verification at all, silently, with no warning.
    */
   workerURL?: string;
   /**
@@ -77,6 +83,16 @@ export type WebClientOptions = {
    * resumes where it left off. To reclaim the space, clear site data.
    */
   runtimeCache?: boolean;
+  /**
+   * Verify the SHA-256 digest of the wasm binary and the bootstrap scripts
+   * (wasm_exec.js, sqlite-bridge.js) against the digests pinned for
+   * RUNTIME_MANIFEST_VERSION (RUNTIME_ASSET_DIGESTS) before executing them.
+   * On by default. Set false only when running a runtime built from source
+   * (for example a local wavelength checkout), whose bytes cannot match the
+   * pinned release; disabling logs a one-time console warning so the switch
+   * is never silently left off in production.
+   */
+  runtimeIntegrity?: boolean;
 };
 
 /**
@@ -121,6 +137,7 @@ export function createWebWalletEngine(
     debug,
     runtimeCache,
     onPerformance,
+    runtimeIntegrity,
     ...engineOptions
   } = options;
 
@@ -132,6 +149,7 @@ export function createWebWalletEngine(
       debug,
       runtimeCache,
       onPerformance,
+      runtimeIntegrity,
     }),
     onPerformance,
     ...engineOptions,

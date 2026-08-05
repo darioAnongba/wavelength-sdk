@@ -14,6 +14,9 @@ jobs:
   # Deliberately its own job so it stays a fast, standalone required check
   # rather than waiting on an install and a full build.
   runtime-pin:
+    # Branch protection requires this exact check name; keep it stable even
+    # as the job's steps grow (the digest-match step below is newer than the
+    # name).
     name: Pinned runtime is downloadable
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +43,17 @@ jobs:
             echo "::error::Runtime pin $VERSION is not a published wavelength release tag, so the Pages deploy would fail on merge. This is expected while a sync is prepared against an unreleased daemon revision. Before merging, flip RUNTIME_MANIFEST_VERSION in packages/core/src/version.ts to the release tag."
           fi
           exit 1
+      # The probe above already isolates the not-published failure modes, so
+      # a failure here is real digest drift between RUNTIME_ASSET_DIGESTS and
+      # the published archive: the backstop for a table generated from a
+      # local build while the release was still a draft.
+      - name: Verify pinned digests match the release assets
+        run: |
+          VERSION="$(node scripts/runtime-version.mjs)"
+          URL="https://github.com/lightninglabs/wavelength/releases/download/$VERSION/Wavewalletdk.wasm.tar.gz"
+          TMP="$(mktemp -d)"
+          curl -fsSL --retry 3 --retry-delay 2 "$URL" | tar -xz -C "$TMP"
+          node scripts/runtime-digests.mjs check "$TMP"
 
   build:
     runs-on: ubuntu-latest

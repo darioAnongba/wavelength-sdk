@@ -35,10 +35,12 @@ source.
 
 ## Run
 
-Start the Vite dev server from the monorepo root:
+Start the Vite dev server from the monorepo root. Locally built runtime assets
+cannot match the pinned release digests, so `dev:local` disables integrity
+verification for this flow (`VITE_RUNTIME_INTEGRITY=off`):
 
 ```bash title="Terminal"
-pnpm --filter web-wallet-demo dev
+pnpm --filter web-wallet-demo run dev:local
 ```
 
 Open the URL Vite prints (typically `http://localhost:5173`). The demo boots a
@@ -65,8 +67,10 @@ export default defineConfig({
 });
 ```
 
-Use `pnpm --filter web-wallet-demo preview` to serve the production build with
-the same headers.
+Use `pnpm --filter web-wallet-demo run build:local && pnpm --filter web-wallet-demo preview`
+to serve the production build with the same headers: locally built runtime
+assets cannot match the pinned release digests, so the plain `build` script
+would fail the integrity check the same way plain `dev` does.
 
 ## Optional (testnet)
 

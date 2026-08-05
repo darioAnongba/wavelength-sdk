@@ -180,8 +180,10 @@ pnpm --filter @lightninglabs/wavelength-web test
 # code bug). Pass a free PORT so it builds and serves THIS worktree fresh:
 PORT=4399 pnpm --filter @lightninglabs/wavelength-docs test
 WAVELENGTH_DIR=... pnpm --filter web-wallet-demo run wasm:local && \
-  pnpm --filter web-wallet-demo run build && \
+  pnpm --filter web-wallet-demo run build:local && \
   pnpm --filter web-wallet-demo run test   # Playwright smoke test: gold standard
+# build:local sets VITE_RUNTIME_INTEGRITY=off; locally built assets from
+# wasm:local cannot match the pinned digests that plain `build` enforces.
 
 # No em-dash, ever. `git grep -nP '\x{2014}'` fails on git builds without
 # Unicode \x{} PCRE; this perl form is portable:

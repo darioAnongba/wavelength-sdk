@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "vite",
+    "dev:local": "VITE_RUNTIME_INTEGRITY=off vite",
     "preview": "vite preview",
     "build": "vite build",
     "build:local": "VITE_RUNTIME_INTEGRITY=off vite build",

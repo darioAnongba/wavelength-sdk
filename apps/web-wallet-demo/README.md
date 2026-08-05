@@ -45,6 +45,13 @@ Rerun the staging step whenever the paired daemon revision
 pnpm --filter web-wallet-demo run dev
 ```
 
+Assets staged with `wasm:fetch` carry pinned integrity digests that match the
+paired wavelength release, so plain `dev` (and `build`) verify them. Assets
+staged with `wasm:local` are built from your working checkout and by
+construction cannot match those pinned digests, so pair `wasm:local` with
+`dev:local` (and `build:local` below) instead, which set
+`VITE_RUNTIME_INTEGRITY=off` to skip the check.
+
 ## Networks
 
 The create screen offers **signet** and **testnet** presets, which target the
@@ -65,3 +72,7 @@ the built demo from `dist/`, so no regtest stack is required. It defaults to
 port 8790 and runs locally only; CI does not run it. A second config,
 `run test:signet`, exercises the built demo against the public signet
 deployment instead.
+
+Use `run build` when the assets were staged with `wasm:fetch`; if you staged
+them with `wasm:local` instead, use `run build:local` so the build does not
+enforce the pinned integrity digests against locally built assets.

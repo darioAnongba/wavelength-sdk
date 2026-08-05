@@ -250,10 +250,13 @@ adoption needs more than one attempt.
 pnpm --filter web-wallet-demo run wasm:fetch
 pnpm perf:web
 
-# Or benchmark a local Wavelength checkout.
+# Or benchmark a local Wavelength checkout. Locally built assets cannot match
+# the pinned release digests, so build the demo with build:local
+# (VITE_RUNTIME_INTEGRITY=off) instead of the perf:web script, which builds
+# against the pinned release.
 WAVELENGTH_DIR=/path/to/wavelength \
   pnpm --filter web-wallet-demo run wasm:local
-pnpm perf:web
+pnpm build && pnpm --filter web-wallet-demo run build:local && pnpm --filter web-wallet-demo run perf
 
 # Increase the sample count or write the JSON report elsewhere.
 WAVELENGTH_PERF_RUNS=20 \

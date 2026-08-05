@@ -81,6 +81,10 @@ into `apps/web-wallet-demo/public/runtime/<version>/`, the versioned path the
 demo's `runtimeBaseUrl` points at. After `vite build`, those files land in
 `dist/` and are served from the app origin.
 
+A runtime built this way will not match the pinned digests described in
+[Integrity verification](#integrity-verification) below; point
+`createWebClient()` at it with `runtimeIntegrity: false` as covered there.
+
 ## Host the assets
 
 Host all of them under a single path and set `runtimeBaseUrl` to that directory.
@@ -121,12 +125,14 @@ become a bypass for the checks below.
 
 ## Integrity verification
 
-Before executing the wasm binary and the two bootstrap scripts it runs
-(`wasm_exec.js` and `sqlite-bridge.js`), the web transport verifies their
-fetched bytes against SHA-256 digests pinned in the npm package for the
+Before executing the wasm binary and the two bootstrap scripts the transport
+executes (`wasm_exec.js` and `sqlite-bridge.js`), the web transport verifies
+their fetched bytes against SHA-256 digests pinned in the npm package for the
 paired `RUNTIME_MANIFEST_VERSION`. Hosting a mismatched version's assets
 fails loudly with `asset_integrity_failed` instead of silently running stale
-or tampered code.
+or tampered code. `wavewalletdk.wasm.gz` is covered too: the client verifies
+its decompressed bytes against the same digest entry as `wavewalletdk.wasm`,
+since decompressing it yields identical content.
 
 The remaining files in the asset set (the sqlite worker chain:
 `sqlite-worker.js`, `sqlite3.js`, `sqlite3.wasm`,

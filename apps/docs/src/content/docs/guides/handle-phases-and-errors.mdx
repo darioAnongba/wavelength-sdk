@@ -125,11 +125,11 @@ function PayButton({ bolt11 }: { bolt11: string }) {
 Every error the Wavelength SDK originates extends [`WavelengthError`](/reference/wavelength-core/#WavelengthError) and carries a `code`
 string that identifies the failure reason at the machine level. Match on
 `err.code` to show a specific message rather than a generic fallback. Named
-SDK codes include `runtime_not_ready`, `asset_load_failed`, `worker_error`,
-`wallet_locked`, and `runtime_lock_unavailable` (the browser refused or
-cancelled the runtime lock request itself, which says nothing about another
-tab; offer a plain retry). Daemon-originated errors currently use
-`wavelength_error`.
+SDK codes include `runtime_not_ready`, `asset_load_failed`,
+`asset_integrity_failed`, `worker_error`, `wallet_locked`, and
+`runtime_lock_unavailable` (the browser refused or cancelled the runtime lock
+request itself, which says nothing about another tab; offer a plain retry).
+Daemon-originated errors currently use `wavelength_error`.
 
 `wallet_locked` is worth handling on its own, and it belongs on the path that
 starts the runtime rather than on a payment. Despite the name it has nothing to
@@ -194,6 +194,9 @@ function PayButton({ bolt11 }: { bolt11: string }) {
             break;
           case 'asset_load_failed':
             console.error('Check runtimeBaseUrl and hosted assets.');
+            break;
+          case 'asset_integrity_failed':
+            console.error('Hosted assets do not match the pinned release.');
             break;
           default:
             console.error('Payment failed:', err.message);

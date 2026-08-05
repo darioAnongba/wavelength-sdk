@@ -52,15 +52,16 @@ export function runtimeAssetError(url: string, cause?: unknown): WavelengthError
  * worker raises it inside its own scope, where the code cannot cross
  * postMessage, so the client recovers the classification from the text. This
  * string is the SDK's own, but the worker is plain JS and cannot import
- * runtimeAssetError: the literal is hand-copied in wavewalletdk-worker.js at the
- * fetch throws (the response was not ok). Those copies are the wording of
- * record; keep this regex in sync with them, not only with runtimeAssetError
+ * runtimeAssetError: the literal is hand-copied at every throw site in
+ * wavewalletdk-worker.js's fetch paths, not just one, and there is no single
+ * source of truth for that count. Those copies are the wording of record;
+ * keep this regex in sync with them, not only with runtimeAssetError
  * here. A wasm that fetched but will not instantiate is deliberately left out:
  * the asset arrived, so the worker throws a distinct "failed to instantiate"
  * message that stays a generic error, matching the main-thread path, which lets
  * the raw instantiate failure propagate rather than recode it as asset_load_failed.
- * A sibling phrase, "failed integrity verification", is the wording of record
- * for a digest mismatch; see isRuntimeIntegrityMessage in integrity.ts.
+ * A sibling phrase, "failed integrity verification", covers digest
+ * mismatches; see {@link isRuntimeIntegrityMessage} in integrity.ts.
  */
 export function isRuntimeAssetMessage(message: string): boolean {
   return /runtime asset could not be loaded/i.test(message);

@@ -2,12 +2,32 @@ import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
 import { afterEach, describe, it, mock } from 'node:test';
 import type { WavelengthPerformanceEvent } from '@lightninglabs/wavelength-core';
-import { instantiateRuntimeAsset, instantiateWasm } from './runtime.ts';
+import { WavelengthError } from '@lightninglabs/wavelength-core';
+import {
+  instantiateRuntimeAsset,
+  instantiateWasm,
+  loadVerifiedScript,
+} from './runtime.ts';
+import { sha256Sri } from './integrity.ts';
+
+// Node's undici HTTP implementation lazily instantiates an internal parser
+// wasm module the first time DecompressionStream/Response/WebAssembly.instantiate
+// machinery actually runs, and that lazy load can resolve on a later tick,
+// straggling into whichever test's stub happens to be active when it
+// settles and inflating that test's call count. Warming the same pipeline up
+// once here, with the real globals, before any test replaces them, keeps
+// that one-time cost out of the suite entirely.
+await new Response(
+  new Response(
+    gzipSync(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])),
+  ).body!.pipeThrough(new DecompressionStream('gzip')),
+)
+  .arrayBuffer()
+  .then((bytes) => WebAssembly.instantiate(bytes, {}));
 
 const savedFetch = globalThis.fetch;
 const savedCaches = (globalThis as { caches?: unknown }).caches;
 const savedInstantiate = WebAssembly.instantiate;
-const savedInstantiateStreaming = WebAssembly.instantiateStreaming;
 
 function stubGlobal(name: string, value: unknown): void {
   Object.defineProperty(globalThis, name, {
@@ -29,7 +49,7 @@ afterEach(() => {
   stubGlobal('fetch', savedFetch);
   stubGlobal('caches', savedCaches);
   stubWebAssembly('instantiate', savedInstantiate);
-  stubWebAssembly('instantiateStreaming', savedInstantiateStreaming);
+  mock.restoreAll();
 });
 
 // A minimal but genuinely valid module: magic plus version, no sections. The
@@ -37,24 +57,21 @@ afterEach(() => {
 // every branch.
 const WASM = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
 
-// captureStreaming stubs instantiateStreaming and records what the loader
-// actually handed the compiler: the bytes and the content type. Those two are
-// the loader's whole contract, so asserting on them beats counting calls.
-function captureStreaming() {
-  const seen: { bytes: Uint8Array; contentType: string | null }[] = [];
-  const fn = mock.fn(async (source: Response | Promise<Response>) => {
-    const response = await source;
-    seen.push({
-      bytes: new Uint8Array(await response.arrayBuffer()),
-      contentType: response.headers.get('content-type'),
-    });
+// captureInstantiate stubs WebAssembly.instantiate and records the bytes the
+// loader actually handed the compiler: bytes are hashed before instantiation,
+// so the loader always buffers a plain ArrayBuffer/Uint8Array rather than
+// streaming into the compiler, unlike the pre-integrity implementation.
+function captureInstantiate() {
+  const seen: Uint8Array[] = [];
+  const fn = mock.fn(async (bytes: ArrayBuffer | Uint8Array) => {
+    seen.push(new Uint8Array(bytes));
 
     return {
       instance: {} as WebAssembly.Instance,
       module: {} as WebAssembly.Module,
     };
   });
-  stubWebAssembly('instantiateStreaming', fn);
+  stubWebAssembly('instantiate', fn);
 
   return seen;
 }
@@ -106,38 +123,42 @@ describe('instantiateRuntimeAsset', { concurrency: false }, () => {
         async () => new Response(host.body(), { headers: host.headers }),
       );
       stubGlobal('fetch', fetchMock);
-      const seen = captureStreaming();
+      const seen = captureInstantiate();
 
       await instantiateRuntimeAsset(
         'https://runtime.example/wavewalletdk.wasm.gz',
         'gzip',
         {},
+        null,
       );
 
       // One fetch: the format is read off the body, never by asking again.
       assert.equal(fetchMock.mock.callCount(), 1);
       assert.equal(seen.length, 1);
-      // Whatever arrived, the compiler is handed decompressed wasm...
-      assert.deepEqual(seen[0].bytes, WASM);
-      // ...under the MIME type it requires, which we set rather than the host.
-      assert.equal(seen[0].contentType, 'application/wasm');
+      // Whatever arrived, the compiler is handed decompressed wasm.
+      assert.deepEqual(seen[0], WASM);
     });
   }
 
   it('preserves a body that spans several chunks', async () => {
     // Padding after the header keeps the magic in the first chunk while the
-    // rest arrives later, which is what peekBody has to stitch back together.
+    // rest arrives later, which is what peekMagic has to stitch back together.
     const padded = new Uint8Array(96 * 1024);
     padded.set(WASM, 0);
     stubGlobal(
       'fetch',
       mock.fn(async () => new Response(gzipSync(padded))),
     );
-    const seen = captureStreaming();
+    const seen = captureInstantiate();
 
-    await instantiateRuntimeAsset('https://runtime.example/x.wasm.gz', 'gzip', {});
+    await instantiateRuntimeAsset(
+      'https://runtime.example/x.wasm.gz',
+      'gzip',
+      {},
+      null,
+    );
 
-    assert.deepEqual(seen[0].bytes, padded);
+    assert.deepEqual(seen[0], padded);
   });
 
   it('rejects a body that is neither gzip nor wasm', async () => {
@@ -145,13 +166,38 @@ describe('instantiateRuntimeAsset', { concurrency: false }, () => {
       'fetch',
       mock.fn(async () => new Response(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))),
     );
-    captureStreaming();
+    captureInstantiate();
 
     await assert.rejects(
-      instantiateRuntimeAsset('https://runtime.example/x.wasm.gz', 'gzip', {}),
+      instantiateRuntimeAsset(
+        'https://runtime.example/x.wasm.gz',
+        'gzip',
+        {},
+        null,
+      ),
       // An HTML error page served with a 200 lands here, so the message has to
       // point at the URL rather than at a compiler error nobody can act on.
       /runtime asset could not be loaded/,
+    );
+  });
+
+  it('converts a network or CORS fetch rejection to asset_load_failed', async () => {
+    stubGlobal(
+      'fetch',
+      mock.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+
+    await assert.rejects(
+      instantiateRuntimeAsset(
+        'https://runtime.example/x.wasm.gz',
+        'gzip',
+        {},
+        null,
+      ),
+      (err: unknown) =>
+        err instanceof WavelengthError && err.code === 'asset_load_failed',
     );
   });
 
@@ -160,20 +206,60 @@ describe('instantiateRuntimeAsset', { concurrency: false }, () => {
       'fetch',
       mock.fn(async () => new Response(gzipSync(WASM))),
     );
-    captureStreaming();
+    captureInstantiate();
     const samples: WavelengthPerformanceEvent[] = [];
 
     await instantiateRuntimeAsset(
       'https://runtime.example/x.wasm.gz',
       'gzip',
       {},
+      null,
       (sample) => samples.push(sample),
     );
 
     assert.deepEqual(
       samples.filter((s) => s.phase === 'wasmCompileInstantiate').map((s) => s.detail),
-      [{ path: 'gzip', streaming: true, body: 'gzip' }],
+      [{ path: 'gzip', streaming: false, body: 'gzip' }],
     );
+  });
+
+  it('verifies and instantiates when the pinned digest matches', async () => {
+    stubGlobal(
+      'fetch',
+      mock.fn(async () => new Response(WASM)),
+    );
+    captureInstantiate();
+    const digest = await sha256Sri(WASM.buffer as ArrayBuffer);
+
+    await instantiateRuntimeAsset(
+      'https://runtime.example/wavewalletdk.wasm',
+      'raw',
+      {},
+      { 'wavewalletdk.wasm': digest },
+    );
+  });
+
+  it('rejects tampered bytes before instantiation', async () => {
+    stubGlobal(
+      'fetch',
+      mock.fn(async () => new Response(WASM)),
+    );
+    const seen = captureInstantiate();
+
+    await assert.rejects(
+      instantiateRuntimeAsset(
+        'https://runtime.example/wavewalletdk.wasm',
+        'raw',
+        {},
+        {
+          'wavewalletdk.wasm':
+            'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        },
+      ),
+      (err: unknown) =>
+        err instanceof WavelengthError && err.code === 'asset_integrity_failed',
+    );
+    assert.equal(seen.length, 0);
   });
 });
 
@@ -189,15 +275,15 @@ describe('instantiateWasm', { concurrency: false }, () => {
           : new Response(WASM);
       }),
     );
-    const seen = captureStreaming();
+    const seen = captureInstantiate();
 
-    await instantiateWasm({}, 'https://runtime.example/');
+    await instantiateWasm({}, 'https://runtime.example/', null);
 
     assert.deepEqual(urls, [
       'https://runtime.example/wavewalletdk.wasm.gz',
       'https://runtime.example/wavewalletdk.wasm',
     ]);
-    assert.deepEqual(seen.at(-1)?.bytes, WASM);
+    assert.deepEqual(seen.at(-1), WASM);
   });
 
   it('tags the total sample with the outcome so a failed load is filterable', async () => {
@@ -205,14 +291,52 @@ describe('instantiateWasm', { concurrency: false }, () => {
       'fetch',
       mock.fn(async () => new Response('nope', { status: 404 })),
     );
-    captureStreaming();
+    captureInstantiate();
     const samples: WavelengthPerformanceEvent[] = [];
 
     await assert.rejects(
-      instantiateWasm({}, 'https://runtime.example/', (s) => samples.push(s)),
+      instantiateWasm({}, 'https://runtime.example/', null, (s) =>
+        samples.push(s),
+      ),
     );
 
     assert.deepEqual(samples.at(-1)?.detail, { path: 'raw', outcome: 'error' });
+  });
+
+  it('verifies the decompressed gzip bytes against the wasm digest', async () => {
+    stubGlobal(
+      'fetch',
+      mock.fn(async () => new Response(gzipSync(WASM))),
+    );
+    captureInstantiate();
+    const digest = await sha256Sri(WASM.buffer as ArrayBuffer);
+
+    const result = await instantiateWasm({}, 'https://runtime.example/', {
+      'wavewalletdk.wasm': digest,
+    });
+    assert.ok(result.instance);
+  });
+
+  it('does not fall back to the raw path on an integrity mismatch', async () => {
+    const urls: string[] = [];
+    stubGlobal(
+      'fetch',
+      mock.fn(async (url: string) => {
+        urls.push(String(url));
+        return new Response(gzipSync(WASM));
+      }),
+    );
+    captureInstantiate();
+
+    await assert.rejects(
+      instantiateWasm({}, 'https://runtime.example/', {
+        'wavewalletdk.wasm':
+          'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      }),
+      (err: unknown) =>
+        err instanceof WavelengthError && err.code === 'asset_integrity_failed',
+    );
+    assert.deepEqual(urls, ['https://runtime.example/wavewalletdk.wasm.gz']);
   });
 });
 
@@ -255,9 +379,9 @@ describe('instantiateRuntimeAsset with a cache', { concurrency: false }, () => {
     const cache = new FakeCache();
     stubCaches(cache);
     stubGlobal('fetch', mock.fn(async () => new Response(gzipSync(WASM))));
-    captureStreaming();
+    captureInstantiate();
 
-    await instantiateRuntimeAsset(URL_GZ, 'gzip', {});
+    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, null);
     // The put is deliberately not awaited, so let it settle.
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -276,20 +400,53 @@ describe('instantiateRuntimeAsset with a cache', { concurrency: false }, () => {
       module: {} as WebAssembly.Module,
     })));
 
-    await instantiateRuntimeAsset(URL_GZ, 'gzip', {});
+    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, null);
 
     assert.equal(fetchMock.mock.callCount(), 0);
+  });
+
+  it('verifies a cached entry against the pinned digest before instantiating it', async () => {
+    const cache = new FakeCache();
+    cache.stored.set(new Request(URL_GZ).url, WASM);
+    stubCaches(cache);
+    const fetchMock = mock.fn(async () => new Response(gzipSync(WASM)));
+    stubGlobal('fetch', fetchMock);
+    captureInstantiate();
+    const digest = await sha256Sri(WASM.buffer as ArrayBuffer);
+
+    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, {
+      'wavewalletdk.wasm': digest,
+    });
+
+    assert.equal(fetchMock.mock.callCount(), 0);
+  });
+
+  it('evicts a tampered cached entry and re-verifies the network refetch', async () => {
+    const cache = new FakeCache();
+    cache.stored.set(new Request(URL_GZ).url, new Uint8Array([9, 9, 9, 9]));
+    stubCaches(cache);
+    const fetchMock = mock.fn(async () => new Response(gzipSync(WASM)));
+    stubGlobal('fetch', fetchMock);
+    captureInstantiate();
+    const digest = await sha256Sri(WASM.buffer as ArrayBuffer);
+
+    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, {
+      'wavewalletdk.wasm': digest,
+    });
+
+    assert.deepEqual(cache.deleted, [new Request(URL_GZ).url]);
+    assert.equal(fetchMock.mock.callCount(), 1);
   });
 
   it('never stores bytes that failed to compile', async () => {
     const cache = new FakeCache();
     stubCaches(cache);
     stubGlobal('fetch', mock.fn(async () => new Response(gzipSync(WASM))));
-    stubWebAssembly('instantiateStreaming', mock.fn(async () => {
+    stubWebAssembly('instantiate', mock.fn(async () => {
       throw new Error('compile failed');
     }));
 
-    await assert.rejects(instantiateRuntimeAsset(URL_GZ, 'gzip', {}));
+    await assert.rejects(instantiateRuntimeAsset(URL_GZ, 'gzip', {}, null));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(cache.stored.size, 0);
@@ -301,52 +458,29 @@ describe('instantiateRuntimeAsset with a cache', { concurrency: false }, () => {
     stubCaches(cache);
     const fetchMock = mock.fn(async () => new Response(gzipSync(WASM)));
     stubGlobal('fetch', fetchMock);
-    stubWebAssembly('instantiate', mock.fn(async () => {
-      throw new Error('bad cached bytes');
-    }));
-    captureStreaming();
+    // The cache read and the post-fetch instantiate now go through the same
+    // WebAssembly.instantiate, so one stub has to fail the first call (the bad
+    // cached bytes) and succeed the second (the refetched, good bytes).
+    let calls = 0;
+    stubWebAssembly(
+      'instantiate',
+      mock.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error('bad cached bytes');
+        }
 
-    await instantiateRuntimeAsset(URL_GZ, 'gzip', {});
+        return {
+          instance: {} as WebAssembly.Instance,
+          module: {} as WebAssembly.Module,
+        };
+      }),
+    );
+
+    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, null);
 
     assert.deepEqual(cache.deleted, [new Request(URL_GZ).url]);
     assert.equal(fetchMock.mock.callCount(), 1);
-  });
-});
-
-describe('instantiateWasm with a failing stream', { concurrency: false }, () => {
-  it('falls back without leaving an unhandled rejection', async () => {
-    // A body whose first chunk carries the gzip magic and which then errors, as
-    // a dropped connection mid-download does. Both tee branches error together,
-    // so the compile rejects and the loader falls back. The abandoned cache
-    // copy must not surface as an unhandledRejection, which is what a consumer
-    // would file a bug about.
-    // Real gzip with its trailing CRC and length cut off: the magic check
-    // passes, and DecompressionStream errors only once it reaches the end.
-    const truncated = gzipSync(new Uint8Array(96 * 1024)).slice(0, -30);
-    const dying = () => new Response(truncated);
-    const cache = new FakeCache();
-    stubCaches(cache);
-    stubGlobal(
-      'fetch',
-      mock.fn(async (url: string) =>
-        String(url).endsWith('.gz') ? dying() : new Response(WASM),
-      ),
-    );
-    captureStreaming();
-
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on('unhandledRejection', onUnhandled);
-    try {
-      const result = await instantiateWasm({}, 'https://runtime.example/');
-      assert.ok(result.instance, 'the raw asset still loads');
-      // Rejections are reported a macrotask after they go unhandled, so give
-      // the loop a turn before concluding there were none.
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      assert.deepEqual(unhandled, []);
-    } finally {
-      process.off('unhandledRejection', onUnhandled);
-    }
   });
 });
 
@@ -359,9 +493,9 @@ describe('runtimeCache: false', { concurrency: false }, () => {
     stubCaches(cache);
     const fetchMock = mock.fn(async () => new Response(gzipSync(WASM)));
     stubGlobal('fetch', fetchMock);
-    captureStreaming();
+    captureInstantiate();
 
-    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, undefined, false);
+    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, null, undefined, false);
 
     assert.equal(fetchMock.mock.callCount(), 1, 'the network was used');
   });
@@ -375,9 +509,9 @@ describe('runtimeCache: false', { concurrency: false }, () => {
     cache.stored.set('https://runtime.example/other', existing);
     stubCaches(cache);
     stubGlobal('fetch', mock.fn(async () => new Response(gzipSync(WASM))));
-    captureStreaming();
+    captureInstantiate();
 
-    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, undefined, false);
+    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, null, undefined, false);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.deepEqual(cache.stored.get(new Request(URL_GZ).url), existing);
@@ -390,11 +524,221 @@ describe('runtimeCache: false', { concurrency: false }, () => {
     const cache = new FakeCache();
     stubCaches(cache);
     stubGlobal('fetch', mock.fn(async () => new Response(gzipSync(WASM))));
-    captureStreaming();
+    captureInstantiate();
 
-    await instantiateRuntimeAsset(URL_GZ, 'gzip', {});
+    await instantiateRuntimeAsset(URL_GZ, 'gzip', {}, null);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(cache.stored.size, 1);
+  });
+});
+
+// A minimal document whose appended scripts "load" on the next microtask.
+// A fresh object each call, which is what gives loadVerifiedScript's
+// per-document dedupe cache test isolation without an explicit reset: the
+// cache is keyed on this object's identity.
+function stubDocument() {
+  const created: Array<Record<string, unknown>> = [];
+  const doc = {
+    createElement: () => {
+      const el: Record<string, unknown> = { dataset: {} };
+      created.push(el);
+      return el;
+    },
+    head: {
+      append: (el: { onload?: () => void }) =>
+        queueMicrotask(() => el.onload?.()),
+    },
+  };
+  (globalThis as Record<string, unknown>).document = doc;
+  return created;
+}
+
+describe('loadVerifiedScript', () => {
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).document;
+  });
+
+  it('executes a verified script from a blob URL and revokes it', async () => {
+    const bytes = new TextEncoder().encode('globalThis.__x = 1;');
+    const digest = await sha256Sri(bytes.buffer as ArrayBuffer);
+    stubGlobal(
+      'fetch',
+      mock.fn(async () => new Response(bytes)),
+    );
+    const created = stubDocument();
+    const revoke = mock.method(URL, 'revokeObjectURL', () => undefined);
+
+    await loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', {
+      'wasm_exec.js': digest,
+    });
+
+    assert.equal(created.length, 1);
+    assert.match(String(created[0]?.src), /^blob:/);
+    assert.deepEqual(created[0]?.dataset, {
+      wavelengthSrc: 'https://x/wasm_exec.js',
+    });
+    assert.equal(revoke.mock.callCount(), 1);
+  });
+
+  it('rejects tampered bytes before executing anything', async () => {
+    stubGlobal(
+      'fetch',
+      mock.fn(async () => new Response(new TextEncoder().encode('evil'))),
+    );
+    const created = stubDocument();
+
+    await assert.rejects(
+      loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', {
+        'wasm_exec.js': 'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      }),
+      (err: unknown) =>
+        err instanceof WavelengthError && err.code === 'asset_integrity_failed',
+    );
+    assert.equal(created.length, 0);
+  });
+
+  it('dedupes a second call for an already-loaded URL without refetching', async () => {
+    const bytes = new TextEncoder().encode('globalThis.__x = 1;');
+    const fetchMock = mock.fn(async () => new Response(bytes));
+    stubGlobal('fetch', fetchMock);
+    const created = stubDocument();
+
+    await loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', null);
+    await loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', null);
+
+    assert.equal(fetchMock.mock.callCount(), 1);
+    assert.equal(created.length, 1);
+  });
+
+  it('dedupes two concurrent calls for the same URL into one fetch and one script', async () => {
+    // The regression this guards: fetch, verify, and blob-execute all await,
+    // so two callers racing for the same URL before either resolves must
+    // still only fetch and execute once. A synchronous DOM-query dedupe
+    // (the pre-existing <script src> mechanism this replaced) could not
+    // observe that race; a dedupe keyed on the URL synchronously, before any
+    // await, can.
+    const bytes = new TextEncoder().encode('globalThis.__x = 1;');
+    const fetchMock = mock.fn(async () => new Response(bytes));
+    stubGlobal('fetch', fetchMock);
+    const created = stubDocument();
+
+    await Promise.all([
+      loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', null),
+      loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', null),
+    ]);
+
+    assert.equal(fetchMock.mock.callCount(), 1);
+    assert.equal(created.length, 1);
+  });
+
+  it('does not dedupe a verifying call onto a call that skipped verification', async () => {
+    // The dedupe cache must not let a client constructed with
+    // runtimeIntegrity: false silently hand its unverified load to a
+    // stricter client sharing the same document: resolveIntegrityDigests
+    // only ever returns null or the shared digest table, so keying on
+    // whether digests is present is exact, not a fingerprint.
+    const bytes = new TextEncoder().encode('globalThis.__x = 1;');
+    const digest = await sha256Sri(bytes.buffer as ArrayBuffer);
+    const fetchMock = mock.fn(async () => new Response(bytes));
+    stubGlobal('fetch', fetchMock);
+    const created = stubDocument();
+
+    await loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', null);
+    await loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', {
+      'wasm_exec.js': digest,
+    });
+
+    assert.equal(fetchMock.mock.callCount(), 2);
+    assert.equal(created.length, 2);
+  });
+
+  it('does not cache a failed load, so a later call can retry', async () => {
+    let calls = 0;
+    stubGlobal(
+      'fetch',
+      mock.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new TypeError('Failed to fetch');
+        }
+
+        return new Response(new TextEncoder().encode('globalThis.__x = 1;'));
+      }),
+    );
+    const created = stubDocument();
+
+    await assert.rejects(
+      loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', null),
+    );
+    await loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', null);
+
+    assert.equal(calls, 2);
+    assert.equal(created.length, 1);
+  });
+
+  it('converts a network or CORS fetch rejection to asset_load_failed', async () => {
+    stubGlobal(
+      'fetch',
+      mock.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+    stubDocument();
+
+    await assert.rejects(
+      loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', null),
+      (err: unknown) =>
+        err instanceof WavelengthError && err.code === 'asset_load_failed',
+    );
+  });
+
+  it('skips hashing when verification is disabled', async () => {
+    stubGlobal(
+      'fetch',
+      mock.fn(async () => new Response(new TextEncoder().encode('anything'))),
+    );
+    const created = stubDocument();
+
+    await loadVerifiedScript('https://x/wasm_exec.js', 'wasm_exec.js', null);
+
+    assert.equal(created.length, 1);
+  });
+});
+
+describe('instantiateWasm with a failing stream', { concurrency: false }, () => {
+  it('falls back without leaving an unhandled rejection', async () => {
+    // A body whose first chunk carries the gzip magic and which then errors, as
+    // a dropped connection mid-download does. Both tee branches error together,
+    // so the buffered read rejects and the loader falls back. The abandoned
+    // cache copy must not surface as an unhandledRejection, which is what a
+    // consumer would file a bug about.
+    // Real gzip with its trailing CRC and length cut off: the magic check
+    // passes, and DecompressionStream errors only once it reaches the end.
+    const truncated = gzipSync(new Uint8Array(96 * 1024)).slice(0, -30);
+    const dying = () => new Response(truncated);
+    const cache = new FakeCache();
+    stubCaches(cache);
+    stubGlobal(
+      'fetch',
+      mock.fn(async (url: string) =>
+        String(url).endsWith('.gz') ? dying() : new Response(WASM),
+      ),
+    );
+    captureInstantiate();
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const result = await instantiateWasm({}, 'https://runtime.example/', null);
+      assert.ok(result.instance, 'the raw asset still loads');
+      // Rejections are reported a macrotask after they go unhandled, so give
+      // the loop a turn before concluding there were none.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });

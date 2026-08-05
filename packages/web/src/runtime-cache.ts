@@ -11,9 +11,14 @@
  * CDN cache hit. The browser simply declines to store an entry that big, so
  * every load pays the full transfer.
  *
- * That transfer is the dominant startup cost. Once the bytes are local,
- * compiling and instantiating the module takes about 140 ms, because V8
- * compiles Go wasm lazily. Everything else is waiting on the network.
+ * That transfer is the dominant startup cost. Once the bytes are local, the
+ * digest is re-verified on every read (see integrity.ts) before compiling
+ * and instantiating, which V8 does lazily for Go wasm. That local work runs
+ * around 165 ms in total: hashing and compiling cost about the same as each
+ * other, and reading the bytes back rather less. Verification is a real
+ * share of it, not the dominant one. The demo's perf suite reports the three
+ * separately as wasmCacheRead, wasmCompileInstantiate, and the remainder of
+ * wasmTotal, so the split is re-measurable rather than a recorded constant.
  *
  * Cache Storage has no such size ceiling, so we keep the bytes ourselves and
  * the wasm load turns into a disk read. Note that caching the *compiled*

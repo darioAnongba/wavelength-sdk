@@ -53,6 +53,25 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
+// loadVerifiedScript executes each bootstrap script via a <script src>
+// pointed at a blob URL; this stub "runs" it by resolving onload on the
+// next microtask, same as runtime.test.ts's stubDocument.
+function stubDocument(): { baseURI: string; createElement: () => unknown; head: { append: (el: { onload?: () => void }) => void } } {
+  return {
+    baseURI: 'https://x/',
+    createElement: () => {
+      const el: { dataset: Record<string, string>; onload?: () => void } = {
+        dataset: {},
+      };
+      return el;
+    },
+    head: {
+      append: (el: { onload?: () => void }) =>
+        queueMicrotask(() => el.onload?.()),
+    },
+  };
+}
+
 class FakeWorker {
   static latest: FakeWorker | undefined;
   readonly messages: WorkerMessage[] = [];
@@ -1179,8 +1198,7 @@ describe('activity transport requests', () => {
       exitRuntime = reject;
     });
     stub('navigator', locks.navigator);
-    // A querySelector hit makes loadScript resolve without a real <script>.
-    stub('document', { querySelector: () => ({}), baseURI: 'https://x/' });
+    stub('document', stubDocument());
     stub('Go', class {
       importObject = {};
       run() {
@@ -1209,7 +1227,13 @@ describe('activity transport requests', () => {
     });
 
     try {
-      const client = new MainThreadWavelengthClient({ runtimeBaseUrl: 'https://x/' });
+      const client = new MainThreadWavelengthClient({
+        runtimeBaseUrl: 'https://x/',
+        // The stubbed fetch returns placeholder bytes, not the real runtime
+        // asset content, so integrity verification is disabled: this test
+        // exercises the runtime-exit path, not digest checking.
+        runtimeIntegrity: false,
+      });
       const events: string[] = [];
       client.subscribe((event) => events.push(event.type));
 
@@ -1264,6 +1288,7 @@ describe('activity transport requests', () => {
       navigator: (globalThis as { navigator?: unknown }).navigator,
       document: (globalThis as { document?: unknown }).document,
       Go: (globalThis as { Go?: unknown }).Go,
+      fetch: globalThis.fetch,
       addEventListener: globalThis.addEventListener,
       removeEventListener: globalThis.removeEventListener,
       call: (globalThis as { wavewalletdkCall?: unknown }).wavewalletdkCall,
@@ -1273,17 +1298,33 @@ describe('activity transport requests', () => {
       Object.defineProperty(globalThis, name, { configurable: true, value });
     locks.navigator satisfies object;
     stub('navigator', locks.navigator);
-    // loadScript resolves via the querySelector hit; the missing Go
-    // constructor then fails the boot with a bare, uncoded WavelengthError,
-    // the shape that a code-classification release keeps missing.
-    stub('document', { querySelector: () => ({}), baseURI: 'https://x/' });
+    // loadVerifiedScript executes each bootstrap script via a <script src>
+    // pointed at a blob URL, "run" here by resolving onload on the next
+    // microtask (same stubDocument as the runtime-exit test above); the
+    // missing Go constructor then fails the boot with a bare, uncoded
+    // WavelengthError, the shape that a code-classification release keeps
+    // missing. The failure happens before instantiateWasm is ever reached,
+    // so no wasm fetch or DecompressionStream stub is needed.
+    stub('document', stubDocument());
+    stub(
+      'fetch',
+      async () =>
+        new Response(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0])),
+    );
     stub('Go', undefined);
     stub('wavewalletdkCall', undefined);
     stub('addEventListener', () => undefined);
     stub('removeEventListener', () => undefined);
 
     try {
-      const client = new MainThreadWavelengthClient({ runtimeBaseUrl: 'https://x/' });
+      const client = new MainThreadWavelengthClient({
+        runtimeBaseUrl: 'https://x/',
+        // The stubbed fetch returns placeholder bytes, not the real runtime
+        // asset content, so integrity verification is disabled: without this
+        // the first bootstrap script fails its digest check and the test
+        // never reaches the missing-Go path its comment describes.
+        runtimeIntegrity: false,
+      });
       await assert.rejects(
         client.start({ network: 'regtest', arkServerAddress: 'h:7070' }),
       );

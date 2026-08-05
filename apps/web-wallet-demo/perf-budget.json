@@ -1,15 +1,15 @@
 {
   "version": 1,
-  "note": "Each threshold sits above the p95 observed on a local run against smoke-server.js, with headroom. The wall-clock metrics (pageReady, createUsable, unlockUsable, createTotal, unlockTotal) measure the demo's render and RPC work and move a long way between machines, so treat this as a local regression guard rather than a cross-device SLO, and re-record on a quiet machine rather than nudging individual numbers when it drifts. The runtime metrics are the ones this instrumentation exists to watch: reload.runtime.wasmTotal sits below the cold budget on purpose, so losing the runtime cache breaches it.",
+  "note": "Each threshold sits above the p95 observed on a local run against smoke-server.js, with headroom. The wall-clock metrics (pageReady, createUsable, unlockUsable, createTotal, unlockTotal) measure the demo's render and RPC work and move a long way between machines, so treat this as a local regression guard rather than a cross-device SLO, and re-record on a quiet machine rather than nudging individual numbers when it drifts. The runtime metrics are the ones this instrumentation exists to watch: reload.runtime.wasmTotal sits below the cold budget on purpose, so losing the runtime cache breaches it. They were re-recorded once digest verification landed on both the cold and the cached path, from the worst p95 across three consecutive quiet runs plus 15 percent. Take the machine seriously: the same suite run alongside a build breached all four runtime budgets while a quiet machine cleared every one, so a red run is a reason to re-run before it is a reason to edit this file.",
   "metrics": {
     "coldLoad.browser.pageReady": {
       "p95Ms": 1400
     },
     "coldLoad.runtime.clientReady": {
-      "p95Ms": 500
+      "p95Ms": 570
     },
     "coldLoad.runtime.wasmTotal": {
-      "p95Ms": 300
+      "p95Ms": 400
     },
     "create.browser.createUsable": {
       "p95Ms": 4000
@@ -24,10 +24,10 @@
       "p95Ms": 1000
     },
     "reload.runtime.clientReady": {
-      "p95Ms": 330
+      "p95Ms": 360
     },
     "reload.runtime.wasmTotal": {
-      "p95Ms": 180
+      "p95Ms": 200
     },
     "unlock.browser.unlockUsable": {
       "p95Ms": 2200

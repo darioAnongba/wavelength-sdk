@@ -207,9 +207,8 @@ for the exact steps.
 
 Serve `wavewalletdk.wasm.gz` however your host makes easiest. The SDK reads the
 first bytes of the response to tell gzip from wasm rather than trusting
-`Content-Type` or `Content-Encoding`, so no particular header setup is needed
-and compilation streams either way. Keep the uncompressed `wavewalletdk.wasm`
-beside it as the fallback.
+`Content-Type` or `Content-Encoding`, so no particular header setup is needed.
+Keep the uncompressed `wavewalletdk.wasm` beside it as the fallback.
 
 ### React Native: native binaries
 

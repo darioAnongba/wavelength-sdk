@@ -8,12 +8,54 @@ description: Solutions to common Wavelength SDK integration errors and guidance 
 ### Runtime asset could not be loaded (`asset_load_failed`)
 
 The client throws `WavelengthError` with code **`asset_load_failed`** when
-`wavewalletdk.wasm.gz`, `wasm_exec.js`, or the SQLite bridge cannot be fetched.
+`wavewalletdk.wasm.gz`, `wasm_exec.js`, or the SQLite bridge cannot be fetched,
+when the connection drops partway through the download, or when a fully
+downloaded body is not recognizable as a runtime asset at all. (A blocked
+`script-src` is also reported this way on the main thread; see the dedicated
+section below.)
 
 **Fix:** Host every file listed in **`RUNTIME_ASSET_FILES`** together at one
 base URL and set **`runtimeBaseUrl`** on `createWebClient()`. Open the failing
 URL in the browser network tab; a 404 almost always means the base path or
-version folder is wrong. See [Hosting runtime assets](/web/get-started/hosting-runtime-assets/).
+version folder is wrong, while a request that starts but never completes
+points at a flaky connection or an interrupted proxy instead. See [Hosting
+runtime assets](/web/get-started/hosting-runtime-assets/).
+
+### Runtime asset failed integrity verification (`asset_integrity_failed`)
+
+The client throws `WavelengthError` with code **`asset_integrity_failed`**
+when a fully-downloaded runtime asset's bytes are recognizable as a runtime
+asset but do not match the SHA-256 digest pinned for the SDK's paired
+`RUNTIME_MANIFEST_VERSION`. Unlike `asset_load_failed`, the asset's content
+was read in full and made sense as a runtime asset; it just did not match
+what this SDK version expects.
+
+**Fix:** The hosted asset set almost always does not match the SDK release's
+pinned `RUNTIME_MANIFEST_VERSION`. Redeploy the matching release asset set,
+then reload the page. In main-thread mode a failed load is sticky for the
+lifetime of the client that hit it (it never retries the scripts it already
+loaded), so a reload, not a retry in place on the same client, is required.
+If you are intentionally running a runtime built from source, set
+`runtimeIntegrity: false` on `createWebClient()` or `createWebWalletEngine()`
+to skip verification. See [Hosting runtime assets](/web/get-started/hosting-runtime-assets/#integrity-verification).
+
+### Runtime asset blocked by Content-Security-Policy
+
+Symptoms: the asset's URL loads fine when opened directly, and the network tab
+shows the fetch itself succeeding, yet the runtime never boots. This is a
+different failure than a fetch that never completes: the SDK fetches and
+verifies each bootstrap script before executing it, and executes it from a
+`blob:` URL. A CSP `script-src` without `blob:` blocks that execution step,
+even though the bytes were fetched and passed verification. The error code
+differs by thread: in main-thread mode this surfaces as `asset_load_failed`
+(the blocked `<script>` reports the same way a failed load does); in the
+default worker transport the browser's CSP violation message does not match
+any error the SDK recognizes, so it surfaces as the generic `wavelength_error`
+instead.
+
+**Fix:** Add `blob:` to your `script-src` directive alongside `'self'`. See
+[Hosting runtime assets](/web/get-started/hosting-runtime-assets/#integrity-verification)
+for the full CSP requirement.
 
 ### Wallet is open in another tab (`wallet_locked`)
 

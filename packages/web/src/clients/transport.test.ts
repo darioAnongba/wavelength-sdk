@@ -1205,9 +1205,13 @@ describe('activity transport requests', () => {
         return runPromise;
       }
     });
-    // The loader identifies the asset by its magic number and streams it, so
-    // the stub has to be a real response with a body rather than a bag with an
-    // arrayBuffer(). Raw wasm magic keeps it on the uncompressed path.
+    // The loader identifies the asset by its magic number, so the stub has to
+    // be a real Response with a body rather than a bag with an arrayBuffer().
+    // Raw wasm magic plus no DecompressionStream forces the uncompressed
+    // path, which buffers the response into an ArrayBuffer and instantiates
+    // it directly against the stubbed WebAssembly.instantiate below;
+    // runtimeIntegrity is disabled (see the client construction below) so the
+    // stubbed placeholder bytes do not fail digest verification.
     stub('DecompressionStream', undefined);
     stub(
       'fetch',
@@ -2546,6 +2550,7 @@ describe('runtime integrity option', () => {
   afterEach(async () => {
     const { resetIntegrityDisabledWarning } = await import('../integrity.ts');
     resetIntegrityDisabledWarning();
+    mock.restoreAll();
   });
 
   it('sends the pinned digest table in $init by default', async () => {

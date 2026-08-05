@@ -742,3 +742,77 @@ describe('instantiateWasm with a failing stream', { concurrency: false }, () => 
     }
   });
 });
+
+describe('instantiateRuntimeAsset raw path body-read failure', { concurrency: false }, () => {
+  it('converts a terminal body-read failure to asset_load_failed', async () => {
+    // Unlike the gzip path, the raw asset is the last fallback: nothing
+    // catches a failure here, so it must surface as the documented
+    // asset_load_failed rather than a raw stream error. The magic-byte peek
+    // (which tees the response and cancels its branch, itself triggering an
+    // extra pull) must be satisfied by valid chunks before the full read
+    // fails, so the failure is attributable to the buffered read, not the peek.
+    const MAGIC = new Uint8Array([0x00, 0x61, 0x73, 0x6d]);
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls <= 2) {
+          controller.enqueue(MAGIC);
+          return;
+        }
+        controller.error(new Error('connection reset'));
+      },
+    });
+    stubGlobal('fetch', mock.fn(async () => new Response(stream)));
+
+    await assert.rejects(
+      instantiateRuntimeAsset(
+        'https://runtime.example/wavewalletdk.wasm',
+        'raw',
+        {},
+        null,
+        undefined,
+        false,
+      ),
+      (err: unknown) =>
+        err instanceof WavelengthError && err.code === 'asset_load_failed',
+    );
+  });
+
+  it('converts a connection dropped before the magic bytes arrive, without an unhandled rejection', async () => {
+    // peekMagic's finally block cancels its reader; cancelling a reader whose
+    // stream already errored (the failed read below) itself rejects with the
+    // same error, which is a second, separate promise from the one this
+    // function awaits. If that cancellation rejection is not also caught, it
+    // surfaces as an unhandled rejection alongside the coded error this test
+    // asserts on.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error('connection reset'));
+      },
+    });
+    stubGlobal('fetch', mock.fn(async () => new Response(stream)));
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await assert.rejects(
+        instantiateRuntimeAsset(
+          'https://runtime.example/wavewalletdk.wasm',
+          'raw',
+          {},
+          null,
+          undefined,
+          false,
+        ),
+        (err: unknown) =>
+          err instanceof WavelengthError && err.code === 'asset_load_failed',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});

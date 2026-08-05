@@ -149,7 +149,9 @@ async function loadVerifiedScriptUncached(
   if (!response.ok) {
     throw runtimeAssetError(url);
   }
-  const bytes = await response.arrayBuffer();
+  const bytes = await response.arrayBuffer().catch((err: unknown) => {
+    throw runtimeAssetError(url, err);
+  });
   if (digests) {
     await verifyAssetBytes(bytes, name, url, digests);
   }
@@ -427,7 +429,9 @@ export async function instantiateRuntimeAsset(
 
   // The digest pins the decompressed binary, so the same RUNTIME_ASSETS.wasm
   // entry verifies bytes fetched from either the compressed or the raw URL.
-  const bytes = await new Response(body).arrayBuffer();
+  const bytes = await new Response(body).arrayBuffer().catch((err: unknown) => {
+    throw runtimeAssetError(url, err);
+  });
   if (digests) {
     await verifyAssetBytes(bytes, RUNTIME_ASSETS.wasm, url, digests);
   }
@@ -500,7 +504,14 @@ export async function instantiateWasm(
       ) {
         throw err;
       }
-      console.warn(`compressed wasm load failed: ${errorMessage(err)}`);
+      // A body-read failure (a dropped connection after headers arrived) is
+      // reported through the same generic asset_load_failed message as a
+      // missing host, so surface the underlying cause here too, when there
+      // is one, rather than losing the actual reason on every gzip fallback.
+      const causeMessage =
+        err instanceof Error && err.cause ? errorMessage(err.cause) : '';
+      const detail = causeMessage ? ` (${causeMessage})` : '';
+      console.warn(`compressed wasm load failed: ${errorMessage(err)}${detail}`);
       path = 'raw';
     }
 

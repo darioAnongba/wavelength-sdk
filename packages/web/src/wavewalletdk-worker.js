@@ -653,9 +653,20 @@ async function instantiateWasm(importObject) {
       if (/failed integrity verification/i.test(String(err?.message || err))) {
         throw err;
       }
+      // A body-read failure (a dropped connection after headers arrived) is
+      // reported through the same generic asset_load_failed message as a
+      // missing host, so surface the underlying cause here too, when there
+      // is one, rather than losing the actual reason on every gzip fallback.
+      // Unlike the main thread's errorMessage(), String(x.message || x) can
+      // never resolve to "": an empty cause.message just falls through to
+      // stringifying the cause object itself. So this stays a plain
+      // truthiness check, with no empty-string guard to mirror the TS side.
+      const detail = err?.cause
+        ? ` (${String(err.cause?.message || err.cause)})`
+        : "";
       postEvent("log", {
         level: "warn",
-        message: `compressed wasm load failed: ${String(err?.message || err)}`,
+        message: `compressed wasm load failed: ${String(err?.message || err)}${detail}`,
       });
       path = "raw";
     }

@@ -21,10 +21,12 @@ const manifestFile = join(
   'runtime-manifest.ts',
 );
 
-// Extracts the asset filenames from the RUNTIME_ASSETS literal.
+// Extracts the asset filenames from the RUNTIME_ASSETS literal. Both
+// RUNTIME_ASSETS and RUNTIME_ASSET_DIGESTS are wrapped in Object.freeze(...)
+// at runtime, so the block markers below match through that wrapper too.
 export function parseAssetFiles(source) {
   const block = source.match(
-    /export const RUNTIME_ASSETS = \{([\s\S]*?)\} as const;/,
+    /export const RUNTIME_ASSETS = Object\.freeze\(\{([\s\S]*?)\} as const\);/,
   );
   if (!block) {
     throw new Error(`could not parse RUNTIME_ASSETS from ${manifestFile}`);
@@ -39,7 +41,7 @@ export function parseAssetFiles(source) {
 // Extracts the committed digest table from the RUNTIME_ASSET_DIGESTS literal.
 export function parseDigests(source) {
   const block = source.match(
-    /export const RUNTIME_ASSET_DIGESTS[^=]*= \{([\s\S]*?)\};/,
+    /export const RUNTIME_ASSET_DIGESTS[^=]*=\s*Object\.freeze\(\{([\s\S]*?)\}\);/,
   );
   if (!block) {
     throw new Error(
@@ -58,7 +60,18 @@ export function sriDigest(buffer) {
 
 function hashDir(dir, files) {
   return Object.fromEntries(
-    files.map((f) => [f, sriDigest(readFileSync(join(dir, f)))]),
+    files.map((f) => {
+      let bytes;
+      try {
+        bytes = readFileSync(join(dir, f));
+      } catch {
+        throw new Error(
+          `could not read ${f} from ${dir}; regenerate with 'pnpm gen:runtime-digests' ` +
+            'or check the staged asset directory',
+        );
+      }
+      return [f, sriDigest(bytes)];
+    }),
   );
 }
 
@@ -77,11 +90,11 @@ function write(dir) {
   const source = readFileSync(manifestFile, 'utf8');
   const digests = hashDir(dir, parseAssetFiles(source));
   const table = Object.entries(digests)
-    .map(([name, digest]) => `  '${name}': '${digest}',`)
+    .map(([name, digest]) => `    '${name}': '${digest}',`)
     .join('\n');
   const updated = source.replace(
-    /(export const RUNTIME_ASSET_DIGESTS[^=]*= \{)[\s\S]*?(\};)/,
-    `$1\n${table}\n$2`,
+    /(export const RUNTIME_ASSET_DIGESTS[^=]*=\s*Object\.freeze\(\{)[\s\S]*?(\}\);)/,
+    `$1\n${table}\n  $2`,
   );
   writeFileSync(manifestFile, updated);
   console.log(

@@ -5,6 +5,7 @@
     "dev": "vite",
     "preview": "vite preview",
     "build": "vite build",
+    "build:local": "VITE_RUNTIME_INTEGRITY=off vite build",
     "test": "playwright test",
     "perf": "playwright test --config=playwright.perf.config.js",
     "test:signet": "playwright test --config=playwright.signet.config.js",

@@ -3,7 +3,9 @@
 # stage the full runtime asset set into public/runtime/<version>/ for local dev
 # + smoke tests. vite build then copies public/ into dist/, which
 # smoke-server.js serves. The version segment is RUNTIME_MANIFEST_VERSION from
-# packages/core, matching where the demo's runtimeBaseUrl points.
+# packages/core, matching where the demo's runtimeBaseUrl points. Locally
+# built assets cannot match the pinned release digests, so build the demo
+# with build:local (VITE_RUNTIME_INTEGRITY=off) afterwards.
 set -euo pipefail
 WAVELENGTH="${WAVELENGTH_DIR:-../../../wavelength}"
 APP="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,3 +41,4 @@ done
 # and is emitted by the consumer's bundler, so it is no longer staged here.
 
 echo "Staged runtime assets into $PUB"
+echo "Local builds cannot match the pinned digests; build the demo with 'pnpm run build:local'."

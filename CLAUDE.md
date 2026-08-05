@@ -28,8 +28,8 @@ npx expo run:ios       # same, for the iOS simulator/device
 # 1. Build the wasm runtime into apps/web-wallet-demo/public/runtime/<version>/ (gitignored, ephemeral).
 #    Needs Go + the sibling ../wavelength checkout.
 WAVELENGTH_DIR="$(cd ../wavelength && pwd)" pnpm --filter web-wallet-demo run wasm:local
-pnpm --filter web-wallet-demo run build     # vite build; copies public/ -> dist/
-pnpm --filter web-wallet-demo run test      # Playwright smoke test (headless Chromium)
+pnpm --filter web-wallet-demo run build:local  # vite build; locally built assets fail the pinned digest check under the plain build
+pnpm --filter web-wallet-demo run test         # Playwright smoke test (headless Chromium)
 ```
 
 The smoke test is **hermetic**: `apps/web-wallet-demo/smoke-server.js` mocks every backend and serves the built demo, so no regtest network is required. It defaults to port 8790 (the regtest stack occupies 7071/8501/8091/10032; `reuseExistingServer` will otherwise latch onto a stray service). It runs locally only. **CI does not run it.**

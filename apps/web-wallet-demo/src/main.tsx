@@ -60,6 +60,11 @@ async function boot() {
     ).href,
     debug: true,
     onPerformance: performanceListener,
+    // VITE_RUNTIME_INTEGRITY=off disables runtime asset digest verification.
+    // A locally built asset set (wasm:local) cannot match the digests pinned
+    // to the published release, so the build:local script sets it; the
+    // default build against fetched release assets verifies.
+    runtimeIntegrity: import.meta.env.VITE_RUNTIME_INTEGRITY !== "off",
   });
 
   createRoot(document.getElementById("root")!).render(

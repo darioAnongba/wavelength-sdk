@@ -47,6 +47,11 @@ Check the npm registry for current versions; do not rely on memorized ones.
   a public directory and point `runtimeBaseUrl` at it. There is no CDN
   default yet; a missing or wrong `runtimeBaseUrl` is the most common
   integration failure.
+- A Content-Security-Policy must allow `script-src blob:`. The runtime loader
+  always executes the bootstrap scripts (`wasm_exec.js`, `sqlite-bridge.js`)
+  from a blob URL rather than a `<script src>`; a CSP without `blob:` breaks
+  the SDK outright. See
+  https://wavelength.lightning.engineering/web/get-started/hosting-runtime-assets.md.
 - Passkey ceremonies are injected. Pass `webPasskeyCeremony` from
   wavelength-web into `useWalletPasskey(ceremony)`; do not implement WebAuthn
   calls by hand.

@@ -68,9 +68,12 @@ on the create screen, and enter the ports it prints in the collapsed
 "Advanced endpoints" section.
 
 Runtime assets are staged (never committed) under
-`public/runtime/<RUNTIME_MANIFEST_VERSION>/`. Before the first `pnpm dev`, and
-after upgrading the SDK or rebuilding WASM from `wavelength`, run
-`pnpm --filter web-wallet-demo run wasm:local` to stage fresh binaries.
+`public/runtime/<RUNTIME_MANIFEST_VERSION>/`. Before the first `dev:local`
+run, and after upgrading the SDK or rebuilding WASM from `wavelength`, run
+`pnpm --filter web-wallet-demo run wasm:local` to stage fresh binaries; locally
+built assets cannot match the pinned release digests, so `dev:local` (not
+plain `dev`) is what disables verification for them. See [Run the demo
+app](/web/get-started/run-the-demo-app/) for the full command.
 
 React Native readers: see [Run the demo app](/react-native/get-started/run-the-demo-app/)
 for the mobile counterpart, which mirrors this demo screen for screen.

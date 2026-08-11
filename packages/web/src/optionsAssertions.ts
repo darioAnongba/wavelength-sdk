@@ -41,7 +41,8 @@ type ForwardedClientOptionKey =
   | 'runtimeThread'
   | 'debug'
   | 'runtimeCache'
-  | 'onPerformance';
+  | 'onPerformance'
+  | 'runtimeIntegrity';
 
 // Resolves to never while every key is forwarded. When one is missing it
 // resolves to that key's name, and the assignment below fails typecheck with

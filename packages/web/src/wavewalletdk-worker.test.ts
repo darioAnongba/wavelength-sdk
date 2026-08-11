@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 import vm from 'node:vm';
@@ -288,5 +289,347 @@ describe('wavewalletdk worker runtime cache option', () => {
     const openRuntimeCache = w.context.openRuntimeCache as () => Promise<unknown>;
     assert.ok(await openRuntimeCache());
     assert.equal(w.opens(), 1);
+  });
+});
+
+describe('wavewalletdk worker asset integrity', () => {
+  const BRIDGE = new Uint8Array([1, 2, 3, 4]);
+  const EXEC = new Uint8Array([5, 6, 7, 8]);
+  // Must start with the real wasm magic number: instantiateRuntimeAsset
+  // sniffs the first four bytes to tell gzip from raw wasm before trusting
+  // the body, so an arbitrary placeholder is rejected before it ever reaches
+  // the (stubbed) WebAssembly.instantiate.
+  const WASM = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+
+  function sri(bytes: Uint8Array): string {
+    return `sha256-${createHash('sha256').update(bytes).digest('base64')}`;
+  }
+
+  // Objects posted from inside vm.runInNewContext belong to a different V8
+  // realm, so their prototypes differ from this file's Object.prototype and
+  // assert/strict's deepEqual (which checks prototype identity) reports them
+  // as unequal even when every field matches. Round-tripping through JSON
+  // normalizes the value into this realm's plain-object prototype before
+  // comparing.
+  function fromRealm(value: unknown): unknown {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  async function pollUntil(
+    predicate: () => boolean,
+    timeoutMs = 1000,
+  ): Promise<void> {
+    const start = Date.now();
+    while (!predicate()) {
+      if (Date.now() - start > timeoutMs) {
+        assert.fail('timed out waiting for condition');
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+
+  type Harness = {
+    posted: unknown[];
+    fetched: string[];
+    imported: string[];
+    onmessage: (event: unknown) => Promise<void>;
+    fireReady: () => void;
+  };
+
+  function bootLoadingWorker(
+    source: string,
+    assets: Record<string, Uint8Array>,
+    rejectAssets: Set<string> = new Set(),
+    cryptoOverride: unknown = crypto,
+  ): Harness {
+    const listeners = new Map<string, Array<() => void>>();
+    const posted: unknown[] = [];
+    const fetched: string[] = [];
+    const imported: string[] = [];
+    const self: Record<string, unknown> = {
+      postMessage: (m: unknown) => posted.push(m),
+      addEventListener: (name: string, listener: () => void) => {
+        const current = listeners.get(name) ?? [];
+        current.push(listener);
+        listeners.set(name, current);
+      },
+    };
+    const context: Record<string, unknown> = {
+      self,
+      console,
+      URL,
+      Blob,
+      Response,
+      Event,
+      btoa,
+      crypto: cryptoOverride,
+      WebAssembly: {
+        instantiate: async () => ({ instance: {} }),
+      },
+      fetch: async (url: string) => {
+        fetched.push(url);
+        const name = url.split('/').pop() ?? '';
+        // Simulates a network or CORS failure, where fetch() itself rejects
+        // rather than resolving with a non-ok response.
+        if (rejectAssets.has(name)) {
+          throw new TypeError('Failed to fetch');
+        }
+        const body = assets[name];
+        return body
+          ? new Response(new Uint8Array(body))
+          : new Response(null, { status: 404 });
+      },
+      importScripts: (url: string) => {
+        imported.push(url);
+        // Loading wasm_exec.js is what defines Go; the stub mirrors that.
+        context.Go = class {
+          importObject = {};
+          run() {
+            return new Promise(() => undefined);
+          }
+        };
+      },
+      setTimeout,
+      clearTimeout,
+    };
+    // DecompressionStream is deliberately absent, and these tests only stage
+    // the raw wasm asset, so the compressed fetch 404s and the worker falls
+    // back to the raw path; the compressed path's no-fallback-on-integrity-
+    // mismatch rule is covered on the main thread, where the shared TS
+    // implementation is directly testable.
+    vm.runInNewContext(source, context);
+    return {
+      posted,
+      fetched,
+      imported,
+      onmessage: self.onmessage as (event: unknown) => Promise<void>,
+      fireReady: () => {
+        for (const l of listeners.get('wavewalletdk-ready') ?? []) l();
+      },
+    };
+  }
+
+  it('verifies scripts and wasm and boots when digests match', async () => {
+    const source = await readFile(
+      new URL('./wavewalletdk-worker.js', import.meta.url),
+      'utf8',
+    );
+    const assets = {
+      'sqlite-bridge.js': BRIDGE,
+      'wasm_exec.js': EXEC,
+      'wavewalletdk.wasm': WASM,
+    };
+    const h = bootLoadingWorker(source, assets);
+    h.onmessage({
+      data: {
+        $init: {
+          runtimeBaseUrl: 'https://x/',
+          debug: false,
+          assetDigests: {
+            'sqlite-bridge.js': sri(BRIDGE),
+            'wasm_exec.js': sri(EXEC),
+            'wavewalletdk.wasm': sri(WASM),
+          },
+        },
+      },
+    });
+    const call = h.onmessage({ data: { id: 1, method: '$ready' } });
+    // Loading is async; give the fetch/verify chain time to reach
+    // waitForWASMReady, then release it.
+    await pollUntil(() => h.imported.length === 2);
+    h.fireReady();
+    await call;
+
+    assert.deepEqual(
+      fromRealm(h.posted.find((m) => (m as { id?: number }).id === 1)),
+      { id: 1, ok: true, result: { ready: true } },
+    );
+    // Scripts executed from blob URLs, not from the network URL.
+    assert.ok(h.imported.every((u) => u.startsWith('blob:')));
+    assert.deepEqual(h.fetched, [
+      'https://x/sqlite-bridge.js',
+      'https://x/wasm_exec.js',
+      // instantiateWasm always tries the compressed asset first regardless of
+      // DecompressionStream support (that check now lives inside
+      // instantiateRuntimeAsset, after the fetch); it 404s here since the
+      // test only stages the raw asset, and the loader falls back.
+      'https://x/wavewalletdk.wasm.gz',
+      'https://x/wavewalletdk.wasm',
+    ]);
+  });
+
+  it('names the network reason in the warning when the compressed wasm fetch rejects', async () => {
+    // The gzip fallback logs err.cause so an operator can tell a DNS or CORS
+    // failure from a plain 404. A fetch rejection is the only failure that
+    // carries that reason, so dropping the cause at the fetch catch would
+    // leave the one case the detail exists for permanently blank.
+    const source = await readFile(
+      new URL('./wavewalletdk-worker.js', import.meta.url),
+      'utf8',
+    );
+    const h = bootLoadingWorker(
+      source,
+      {
+        'sqlite-bridge.js': BRIDGE,
+        'wasm_exec.js': EXEC,
+        'wavewalletdk.wasm': WASM,
+      },
+      new Set(['wavewalletdk.wasm.gz']),
+    );
+    h.onmessage({
+      data: {
+        $init: { runtimeBaseUrl: 'https://x/', debug: false, assetDigests: null },
+      },
+    });
+    const call = h.onmessage({ data: { id: 1, method: '$ready' } });
+    await pollUntil(() => h.imported.length === 2);
+    h.fireReady();
+    await call;
+
+    const warning = h.posted.find(
+      (m) =>
+        (m as { event?: { type?: string; payload?: { message?: string } } })
+          .event?.payload?.message?.startsWith('compressed wasm load failed'),
+    ) as { event: { payload: { message: string } } } | undefined;
+    assert.ok(warning, 'expected a compressed-wasm warning');
+    assert.match(warning.event.payload.message, /Failed to fetch/);
+    // The raw fallback still succeeded, so the warning is diagnostic only.
+    assert.deepEqual(
+      fromRealm(h.posted.find((m) => (m as { id?: number }).id === 1)),
+      { id: 1, ok: true, result: { ready: true } },
+    );
+  });
+
+  it('rejects a tampered script with an integrity message and executes nothing', async () => {
+    const source = await readFile(
+      new URL('./wavewalletdk-worker.js', import.meta.url),
+      'utf8',
+    );
+    const h = bootLoadingWorker(source, { 'sqlite-bridge.js': BRIDGE });
+    h.onmessage({
+      data: {
+        $init: {
+          runtimeBaseUrl: 'https://x/',
+          debug: false,
+          assetDigests: { 'sqlite-bridge.js': sri(EXEC) },
+        },
+      },
+    });
+    await h.onmessage({ data: { id: 1, method: '$ready' } });
+
+    const reply = h.posted.find((m) => (m as { id?: number }).id === 1) as {
+      ok: boolean;
+      error: string;
+    };
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /failed integrity verification/);
+    assert.deepEqual(h.imported, []);
+  });
+
+  it('converts a network or CORS fetch rejection to the load-failed message', async () => {
+    const source = await readFile(
+      new URL('./wavewalletdk-worker.js', import.meta.url),
+      'utf8',
+    );
+    const h = bootLoadingWorker(
+      source,
+      {},
+      new Set(['sqlite-bridge.js']),
+    );
+    h.onmessage({
+      data: {
+        $init: {
+          runtimeBaseUrl: 'https://x/',
+          debug: false,
+          assetDigests: null,
+        },
+      },
+    });
+    await h.onmessage({ data: { id: 1, method: '$ready' } });
+
+    const reply = h.posted.find((m) => (m as { id?: number }).id === 1) as {
+      ok: boolean;
+      error: string;
+    };
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /runtime asset could not be loaded/);
+    assert.deepEqual(h.imported, []);
+  });
+
+  it('reports a missing crypto.subtle with an actionable message, not a raw TypeError', async () => {
+    // Worker mode does not require a secure context the way OPFS persistence
+    // does, so a plain-HTTP host reaches sha256Sri with no crypto.subtle.
+    const source = await readFile(
+      new URL('./wavewalletdk-worker.js', import.meta.url),
+      'utf8',
+    );
+    const h = bootLoadingWorker(
+      source,
+      { 'sqlite-bridge.js': BRIDGE },
+      new Set(),
+      {},
+    );
+    h.onmessage({
+      data: {
+        $init: {
+          runtimeBaseUrl: 'https://x/',
+          debug: false,
+          assetDigests: { 'sqlite-bridge.js': sri(BRIDGE) },
+        },
+      },
+    });
+    await h.onmessage({ data: { id: 1, method: '$ready' } });
+
+    const reply = h.posted.find((m) => (m as { id?: number }).id === 1) as {
+      ok: boolean;
+      error: string;
+    };
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /requires crypto\.subtle/);
+    assert.deepEqual(h.imported, []);
+  });
+
+  it('loads without hashing when the digest table is null', async () => {
+    const source = await readFile(
+      new URL('./wavewalletdk-worker.js', import.meta.url),
+      'utf8',
+    );
+    const assets = {
+      'sqlite-bridge.js': BRIDGE,
+      'wasm_exec.js': EXEC,
+      'wavewalletdk.wasm': WASM,
+    };
+    const h = bootLoadingWorker(source, assets);
+    h.onmessage({
+      data: {
+        $init: {
+          runtimeBaseUrl: 'https://x/',
+          debug: false,
+          assetDigests: null,
+        },
+      },
+    });
+    const call = h.onmessage({ data: { id: 1, method: '$ready' } });
+    // Loading is async; give the fetch/verify chain time to reach
+    // waitForWASMReady, then release it.
+    await pollUntil(() => h.imported.length === 2);
+    h.fireReady();
+    await call;
+
+    assert.deepEqual(
+      fromRealm(h.posted.find((m) => (m as { id?: number }).id === 1)),
+      { id: 1, ok: true, result: { ready: true } },
+    );
+    assert.ok(h.imported.every((u) => u.startsWith('blob:')));
+    assert.deepEqual(h.fetched, [
+      'https://x/sqlite-bridge.js',
+      'https://x/wasm_exec.js',
+      // instantiateWasm always tries the compressed asset first regardless of
+      // DecompressionStream support (that check now lives inside
+      // instantiateRuntimeAsset, after the fetch); it 404s here since the
+      // test only stages the raw asset, and the loader falls back.
+      'https://x/wavewalletdk.wasm.gz',
+      'https://x/wavewalletdk.wasm',
+    ]);
   });
 });

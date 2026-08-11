@@ -47,7 +47,7 @@ cd <daemon checkout> && git worktree remove --force /tmp/wavelength-<version>
 | wavecli flags/commands | Nothing | The command's page in `apps/docs/src/content/docs/cli/`; a new top-level command also needs a `CLI_NAV` entry. A change to the GLOBAL flag set, the exit-code table, or the error envelope touches `cli.mdx` and potentially every command page: grep the whole `cli/` directory for the old flag spelling or exit code, not just the changed command's page. A REMOVED one must be deleted in lockstep: its `cli/<cmd>.mdx`, its `CLI_NAV` entry, its row in the `cli.mdx` table, and its slug in `apps/docs/tests/cli.spec.ts`'s hardcoded slug list (`git grep -n <cmd> apps/docs` finds stragglers) |
 | Daemon operational facts (ports, TLS, build tags, gateway behavior) | Nothing | `apps/docs/src/content/docs/api/get-started.mdx` and `api/rest.mdx`; `cli.mdx` global flags/exit codes |
 | Wasm runtime build | `wasm:local` (step 5) | Bump the pin first |
-| Runtime asset FILE LIST | Nothing | Three places in lockstep: `packages/web/src/runtime-manifest.ts` (`RUNTIME_ASSET_FILES`), `apps/web-wallet-demo/scripts/wasm-local.sh`, `apps/web-wallet-demo/scripts/fetch-runtime-assets.sh`. A fourth lives upstream in wavelength's `mobile-bindings.yml`: its "Package browser WASM runtime" step lists the files packed into the release archive, so diff that step's list against the three local copies |
+| Runtime asset FILE LIST | Nothing | Three places in lockstep: `packages/web/src/runtime-manifest.ts` (`RUNTIME_ASSET_FILES`, and in the same file, generated: `RUNTIME_ASSET_DIGESTS`), `apps/web-wallet-demo/scripts/wasm-local.sh`, `apps/web-wallet-demo/scripts/fetch-runtime-assets.sh`. A fourth lives upstream in wavelength's `mobile-bindings.yml`: its "Package browser WASM runtime" step lists the files packed into the release archive, so diff that step's list against the three local copies |
 | Gomobile mobile bindings build | `bindings:local` (step 5) | Bump the pin first. Mirrors the wasm row: build from `$WAVELENGTH_DIR`, since the pin is often not downloadable yet. `bindings:fetch` works only once it names a published release |
 | Gomobile facade (`sdk/wavewalletdk/mobile`) | Nothing | Native SDK docs checkpoint (below) |
 
@@ -138,6 +138,12 @@ export WAVELENGTH_DIR=/absolute/path/to/wavelength   # a worktree at the
    commit-SHA pin (no such release) and for a tag whose release is still a
    draft (assets not public). Nothing in CI covers the bindings, so a stale
    staging only shows up on a device build.
+
+   After staging, run `pnpm gen:runtime-digests` so `RUNTIME_ASSET_DIGESTS` in
+   `packages/web/src/runtime-manifest.ts` matches the newly staged set.
+   Digests generated from a `wasm:local` build against a draft release are
+   provisional: they are only confirmed correct once CI's `runtime-pin` job
+   passes its digest check against the published release archive.
 6. **Native SDK docs**: run the checkpoint below. It is cheap and usually a
    no-op, but nothing else in this procedure catches native-page drift.
 7. **Versions + commits**: the packages version in lockstep with the daemon
@@ -180,8 +186,10 @@ pnpm --filter @lightninglabs/wavelength-web test
 # code bug). Pass a free PORT so it builds and serves THIS worktree fresh:
 PORT=4399 pnpm --filter @lightninglabs/wavelength-docs test
 WAVELENGTH_DIR=... pnpm --filter web-wallet-demo run wasm:local && \
-  pnpm --filter web-wallet-demo run build && \
+  pnpm --filter web-wallet-demo run build:local && \
   pnpm --filter web-wallet-demo run test   # Playwright smoke test: gold standard
+# build:local sets VITE_RUNTIME_INTEGRITY=off; locally built assets from
+# wasm:local cannot match the pinned digests that plain `build` enforces.
 
 # No em-dash, ever. `git grep -nP '\x{2014}'` fails on git builds without
 # Unicode \x{} PCRE; this perl form is portable:

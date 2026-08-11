@@ -1,10 +1,10 @@
-import {
+import type {
   ActivityStreamPayload,
-  camelizeKeys,
   WavelengthEvent,
   WavelengthEventType,
   WavelengthLogPayload,
 } from '@lightninglabs/wavelength-core';
+import { camelizeKeys } from '@lightninglabs/wavelength-core';
 export { errorMessage } from '@lightninglabs/wavelength-core';
 
 /**

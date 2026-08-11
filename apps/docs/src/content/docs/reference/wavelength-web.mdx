@@ -41,6 +41,7 @@ export const webClientOptionsSig = `type WebClientOptions = {
   runtimeCache?: boolean;
   debug?: boolean;
   onPerformance?: WavelengthPerformanceListener;
+  runtimeIntegrity?: boolean;
 };`;
 
 export const createWebWalletEngineSig = `function createWebWalletEngine(
@@ -71,6 +72,8 @@ export const runtimeAssetsSig = `const RUNTIME_ASSETS: {
   sqliteWasm: string;
   sqliteOpfsProxy: string;
 };`;
+
+export const runtimeAssetDigestsSig = `const RUNTIME_ASSET_DIGESTS: Readonly<Record<string, string>>;`;
 
 export const runtimeManifestVersionSig = `const RUNTIME_MANIFEST_VERSION: string;`;
 
@@ -194,12 +197,13 @@ Browser-specific options for `createWebClient`. The config passed to
 <Signature title="wavelength-web.d.ts" code={webClientOptionsSig} />
 
 <ParamsTable rows={[
-  { name: 'workerURL', type: 'string', desc: 'Overrides the worker entry point. By default the worker client spawns the worker its bundler emits from new URL("../wavewalletdk-worker.js", import.meta.url); pass this to point at a custom-hosted copy instead. runtimeBaseUrl is still forwarded to the worker even when this is set. Default: bundler-emitted worker URL.' },
+  { name: 'workerURL', type: 'string', desc: 'Overrides the worker entry point. By default the worker client spawns the worker its bundler emits from new URL("../wavewalletdk-worker.js", import.meta.url); pass this to point at a custom-hosted copy instead. runtimeBaseUrl is still forwarded to the worker even when this is set. Keep a custom copy in sync with the installed SDK version: an older copy predating runtime integrity ignores the digest table this client sends it and performs no verification at all, silently. Default: bundler-emitted worker URL.' },
   { name: 'runtimeBaseUrl', type: 'string', desc: 'Base URL the daemon runtime binaries (wavewalletdk.wasm.gz, wasm_exec.js, sqlite-*.js) are resolved against. Unset resolves relative to the document: worker mode computes the document base URL and forwards it to the worker so it resolves page-relative just like main-thread mode. Default: unset (page-relative).' },
   { name: 'runtimeThread', type: 'RuntimeThread', desc: 'Which thread runs the WASM runtime. \'main\' produces a MainThreadWavelengthClient that blocks rendering while busy; use it only when Worker support is unavailable. Default: \'worker\'.' },
   { name: 'debug', type: 'boolean', desc: 'Logs every RPC request and response payload to the console. Payloads can include addresses and amounts, so treat this as a development-only aid and never enable it in a shipped app. Main-thread mode logs facade calls directly; worker mode forwards the flag into the worker so it can log there too. Default: false.' },
   { name: 'runtimeCache', type: 'boolean', desc: 'Keeps a copy of the daemon runtime in Cache Storage so a returning visitor reads it from disk instead of downloading it again. Set false to take every runtime binary from the network, which is what you want while iterating on a local daemon build: rebuilding at the same RUNTIME_MANIFEST_VERSION produces new bytes under a bucket name that has not changed, and DevTools\' "Disable cache" governs only the HTTP cache, so it will not help. Turning it off deletes nothing: an existing bucket is left as it is and simply not read or written, so turning it back on resumes from it. Default: true.' },
   { name: 'onPerformance', type: 'WavelengthPerformanceListener', desc: 'Receives structured timing samples for runtime readiness and wasm loading. Instrumentation stays off unless this is supplied: with it omitted no timing is measured and no samples are delivered. A listener that throws cannot break wallet work. Pass the same callback to createWebWalletEngine to also cover wallet RPCs, info adoption and sync polling. Default: unset (disabled).' },
+  { name: 'runtimeIntegrity', type: 'boolean', desc: 'Verifies the SHA-256 digest of the wasm binary and the bootstrap scripts (wasm_exec.js, sqlite-bridge.js) against the digests pinned for RUNTIME_MANIFEST_VERSION (RUNTIME_ASSET_DIGESTS) before executing them. Set false only when running a runtime built from source (for example a local wavelength checkout), whose bytes cannot match the pinned release; disabling logs a one-time console warning so the switch is never silently left off in production. Default: true.' },
 ]} />
 
 </ApiSymbol>
@@ -244,6 +248,7 @@ The browser-specific settings from `WebClientOptions` combined with [`WalletEngi
   { name: 'debug', type: 'boolean', desc: 'Same as WebClientOptions.debug.' },
   { name: 'runtimeCache', type: 'boolean', desc: 'Same as WebClientOptions.runtimeCache.' },
   { name: 'onPerformance', type: 'WavelengthPerformanceListener', desc: 'Same as WebClientOptions.onPerformance, and forwarded to the engine as well, so one listener covers runtime loading plus wallet RPCs, info adoption and sync polling.' },
+  { name: 'runtimeIntegrity', type: 'boolean', desc: 'Same as WebClientOptions.runtimeIntegrity.' },
   { name: 'config', type: 'RuntimeConfig', desc: 'Required when autoStart is true. Default runtime config used by autoStart and by the engine\'s start() when called with no argument.' },
   { name: 'autoStart', type: 'true | false', desc: 'Optional. Start the runtime automatically once it is ready. Setting it to true requires config.' },
 ]} />
@@ -339,6 +344,19 @@ these files and point `runtimeBaseUrl` at them before calling
 
 </ApiSymbol>
 
+<ApiSymbol name="RUNTIME_ASSET_DIGESTS" kind="const">
+
+The SHA-256 digest (SRI format, `sha256-<base64>`) of every file in the
+runtime asset set published for `RUNTIME_MANIFEST_VERSION`, keyed by
+filename. Generated by `pnpm gen:runtime-digests` from a staged asset set;
+the web transport verifies the wasm binary and the bootstrap scripts it
+executes against this table before running them, and the full table is
+exported so integrators can also verify their hosted set at deploy time.
+
+<Signature title="wavelength-web.d.ts" code={runtimeAssetDigestsSig} />
+
+</ApiSymbol>
+
 <ApiSymbol name="RUNTIME_MANIFEST_VERSION" kind="const">
 
 The daemon build this SDK release is paired with: the generated types, the
@@ -369,7 +387,8 @@ from:
   page-relative in the same way.
 - **Compressed-first wasm loading:** the client fetches the gzip-compressed
   `wavewalletdk.wasm.gz` binary first and falls back to the uncompressed
-  `wavewalletdk.wasm` only if that asset cannot be loaded at all.
+  `wavewalletdk.wasm` if that asset cannot be loaded at all, or the browser has
+  no `DecompressionStream` to inflate it.
 - **The body decides, not the headers:** both assets go through one loader,
   which reads the first four bytes and branches on the magic number
   (`1f 8b` for gzip, `00 61 73 6d` for wasm) rather than on `Content-Type` or
@@ -378,18 +397,26 @@ from:
   inflated, and `Content-Encoding` is not a CORS-safelisted response header, so
   cross-origin it is often invisible even when the transport did decode the
   body. Reading the bytes means every one of those configurations lands on the
-  same path and none of them falls back to the larger uncompressed asset
-  unnecessarily. It also means you do not have to configure anything for the
+  same path. It also means you do not have to configure anything for the
   compressed asset to work.
-- **Streaming throughout:** the loader rewraps the body in a response it labels
-  `application/wasm` itself and hands that to
-  `WebAssembly.instantiateStreaming`, so compilation overlaps the download. When
-  the bytes are gzip they are piped through a `DecompressionStream` on the way,
-  which keeps the compressed path streaming too rather than buffering the whole
-  module first. Labelling the response is what makes this independent of the
-  host's own `Content-Type`, which `instantiateStreaming` would otherwise
-  reject. A gzip body on a browser with no `DecompressionStream` is the one case
-  that falls back to `wavewalletdk.wasm`.
+- **Integrity verification before execution:** before running any of it, the
+  client verifies the fetched bytes of the wasm binary and its two bootstrap
+  scripts (`wasm_exec.js` and `sqlite-bridge.js`) against the digests pinned
+  in `RUNTIME_ASSET_DIGESTS` for `RUNTIME_MANIFEST_VERSION`. The bootstrap
+  scripts are fetched, verified, and then executed from a blob URL (a
+  `<script src={blobURL}>` on the main thread, `importScripts(blobURL)` in
+  the worker); the wasm bytes are verified and then passed straight to
+  `WebAssembly.instantiate`, buffered rather than streamed, since the bytes
+  must be complete before they can be hashed. A digest mismatch throws
+  `asset_integrity_failed` and does not fall back to another loading path,
+  since retrying would only refetch the same tampered or stale content from
+  the same origin. A cache hit (see `runtimeCache` above) is re-verified the
+  same way before it is instantiated, so a Cache Storage entry can never
+  become a bypass. Set `runtimeIntegrity: false` to skip this check, for
+  example against a runtime you built yourself. See the
+  [hosting runtime assets guide](/web/get-started/hosting-runtime-assets/#integrity-verification)
+  for the full verification story, including the files this check does not
+  cover.
 - **Worker entry resolution:** the worker script itself (unlike the daemon
   binaries above) ships inside `@lightninglabs/wavelength-web` and is emitted
   by your bundler via `new URL('../wavewalletdk-worker.js', import.meta.url)`, so

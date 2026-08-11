@@ -14,11 +14,13 @@ import { RUNTIME_ASSETS } from '../runtime-manifest.ts';
 import type { WebClientOptions } from '../index.ts';
 import {
   instantiateWasm,
-  loadScript,
+  loadVerifiedScript,
   resolveRuntimeAsset,
   waitForReadyEvent,
   wavewalletdkCall,
 } from '../runtime.ts';
+import { resolveIntegrityDigests } from '../integrity.ts';
+import type { RuntimeDigests } from '../integrity.ts';
 import {
   RuntimeLock,
   NO_RUNTIME_LEASE,
@@ -63,6 +65,7 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
   private readonly debug: boolean;
   private readonly onPerformance: WavelengthPerformanceListener | undefined;
   private readonly runtimeCache: boolean;
+  private readonly integrityDigests: RuntimeDigests | null;
   private readonly onRuntimeReady = () => this.emit({ type: 'runtimeReady' });
 
   constructor(options: WebClientOptions = {}) {
@@ -71,6 +74,7 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
     this.debug = options.debug ?? false;
     this.onPerformance = options.onPerformance;
     this.runtimeCache = options.runtimeCache ?? true;
+    this.integrityDigests = resolveIntegrityDigests(options.runtimeIntegrity);
     // The runtime fires 'wavewalletdk-ready' once; keep the handler reference
     // so dispose() can detach it if the client is torn down before it fires.
     globalThis.addEventListener('wavewalletdk-ready', this.onRuntimeReady, {
@@ -426,8 +430,30 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
     }
 
     const base = this.runtimeBaseUrl;
+    const digests = this.integrityDigests;
+    // The bridge resolves its nested worker and sqlite URLs from
+    // document.currentScript when these globals are absent; executed from a
+    // blob URL that resolution cannot work, so the globals are set first,
+    // mirroring the worker path.
+    const bridgeGlobals = globalThis as typeof globalThis & {
+      sqliteBridgeWorkerURL?: string;
+      sqliteBridgeSQLiteJSURL?: string;
+    };
+    bridgeGlobals.sqliteBridgeWorkerURL = resolveRuntimeAsset(
+      base,
+      RUNTIME_ASSETS.sqliteWorker,
+    );
+    bridgeGlobals.sqliteBridgeSQLiteJSURL = resolveRuntimeAsset(
+      base,
+      RUNTIME_ASSETS.sqlite,
+    );
+
     const sqliteStartedAt = this.onPerformance ? performanceNow() : undefined;
-    await loadScript(resolveRuntimeAsset(base, RUNTIME_ASSETS.sqliteBridge));
+    await loadVerifiedScript(
+      resolveRuntimeAsset(base, RUNTIME_ASSETS.sqliteBridge),
+      RUNTIME_ASSETS.sqliteBridge,
+      digests,
+    );
     if (sqliteStartedAt !== undefined) {
       reportPerformance(this.onPerformance, {
         stage: 'runtime',
@@ -437,7 +463,11 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
       });
     }
     const goScriptStartedAt = this.onPerformance ? performanceNow() : undefined;
-    await loadScript(resolveRuntimeAsset(base, RUNTIME_ASSETS.wasmExec));
+    await loadVerifiedScript(
+      resolveRuntimeAsset(base, RUNTIME_ASSETS.wasmExec),
+      RUNTIME_ASSETS.wasmExec,
+      digests,
+    );
     if (goScriptStartedAt !== undefined) {
       reportPerformance(this.onPerformance, {
         stage: 'runtime',
@@ -463,6 +493,7 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
     const result = await instantiateWasm(
       go.importObject,
       base,
+      digests,
       this.onPerformance,
       this.runtimeCache,
     );

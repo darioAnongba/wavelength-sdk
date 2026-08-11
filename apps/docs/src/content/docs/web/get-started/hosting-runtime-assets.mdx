@@ -81,6 +81,10 @@ into `apps/web-wallet-demo/public/runtime/<version>/`, the versioned path the
 demo's `runtimeBaseUrl` points at. After `vite build`, those files land in
 `dist/` and are served from the app origin.
 
+A runtime built this way will not match the pinned digests described in
+[Integrity verification](#integrity-verification) below; point
+`createWebClient()` at it with `runtimeIntegrity: false` as covered there.
+
 ## Host the assets
 
 Host all of them under a single path and set `runtimeBaseUrl` to that directory.
@@ -96,14 +100,15 @@ redeploy the matching WASM bundle. Mismatched versions can fail at load time or
 produce subtle runtime errors.
 
 **Compression.** The client fetches `wavewalletdk.wasm.gz` first and falls back
-to the uncompressed `wavewalletdk.wasm` if it cannot be used. Host both files so
+to the uncompressed `wavewalletdk.wasm` if it cannot be used (for example when
+the browser has no `DecompressionStream` to inflate it). Host both files so
 every supported browser can load the runtime.
 
 No particular *compression* headers are required. The client reads the file's
 first bytes and branches on the magic number rather than on `Content-Type` or
 `Content-Encoding`, so a body your host serves compressed, one it has already
-inflated, and one labelled `application/gzip` all load the same way, and
-compilation streams in every case. Compress it however your host makes easiest.
+inflated, and one labelled `application/gzip` all load the same way. Compress
+it however your host makes easiest.
 
 Other headers still matter: a cross-origin `runtimeBaseUrl` needs
 `Cross-Origin-Resource-Policy: cross-origin` on these assets, covered in
@@ -114,4 +119,43 @@ module this large in its HTTP cache regardless of what you send. The SDK
 therefore keeps its own copy in Cache Storage so returning visitors do not
 re-download it; see [Data &
 persistence](/web/runtime/data-and-persistence/#the-runtime-cache) for what that
-stores and when it is pruned.
+stores and when it is pruned. Cached bytes are re-verified against the pinned
+digest on every read, exactly like a fresh fetch, so a cache entry can never
+become a bypass for the checks below.
+
+## Integrity verification
+
+Before executing the wasm binary and the two bootstrap scripts the transport
+executes (`wasm_exec.js` and `sqlite-bridge.js`), the web transport verifies
+their fetched bytes against SHA-256 digests pinned in the npm package for the
+paired `RUNTIME_MANIFEST_VERSION`. Hosting a mismatched version's assets
+fails loudly with `asset_integrity_failed` instead of silently running stale
+or tampered code. `wavewalletdk.wasm.gz` is covered too: the client verifies
+its decompressed bytes against the same digest entry as `wavewalletdk.wasm`,
+since decompressing it yields identical content.
+
+The remaining files in the asset set (the sqlite worker chain:
+`sqlite-worker.js`, `sqlite3.js`, `sqlite3.wasm`,
+`sqlite3-opfs-async-proxy.js`) are not verified at runtime. Cover them by
+checking your deployed set at deploy time instead: `RUNTIME_ASSET_DIGESTS`
+exports the digest for every file in the set, keyed by filename in the same
+SRI format (`sha256-<base64>`) the client checks against.
+
+```bash title="Terminal"
+f=./public/wavewalletdk/<version>/wavewalletdk.wasm
+echo "sha256-$(openssl dgst -sha256 -binary "$f" | openssl base64 -A)"
+# compare the output against RUNTIME_ASSET_DIGESTS['wavewalletdk.wasm']
+```
+
+**Escape hatch for source-built runtimes.** A runtime you build yourself from
+a `wavelength` checkout will not match the pinned digests, since those pin a
+specific published release. Set `runtimeIntegrity: false` on `createWebClient()`
+or `createWebWalletEngine()` to skip verification; doing so logs a one-time
+console warning so the switch is never silently left off in production.
+
+**Hosting requirements.** Serve the runtime assets same-origin where
+possible. If your app sets a Content-Security-Policy, `script-src` must
+include `blob:` alongside `'self'`: the SDK executes its verified bootstrap
+scripts from blob URLs, and a policy without `blob:` breaks the SDK outright.
+Hosting the assets cross-origin additionally requires CORS headers on the
+asset host, since the client fetches them before verifying their bytes.

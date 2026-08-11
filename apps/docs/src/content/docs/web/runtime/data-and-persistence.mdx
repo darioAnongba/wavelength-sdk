@@ -63,9 +63,13 @@ It exists because the browser will not keep the module in its HTTP cache. The
 binary is around 20 MB compressed, which is large enough that Chrome declines to
 store it even when it is served with `Cache-Control: immutable` and hits a CDN
 edge, so without a cache of our own every single page load re-downloads the whole
-thing. Once the bytes are local, compiling and instantiating the module takes on
-the order of 100 ms, so on a 50 Mbps connection caching takes the runtime load
-from roughly 3.2 s to under 100 ms.
+thing. Once the bytes are local, reading them back, verifying the cached module's
+digest, compiling, and instantiating it takes on the order of 165 ms; hashing and
+compiling cost about the same as each other, and the read rather less
+(re-verifying hashes the full decompressed module on every read; see
+[Integrity verification](/web/get-started/hosting-runtime-assets/#integrity-verification)),
+so on a 50 Mbps connection caching takes the runtime load from roughly 3.2 s to
+around 165 ms.
 
 The cache holds one runtime at a time. It is keyed on
 `RUNTIME_MANIFEST_VERSION`, not on the asset URL, so upgrading the SDK to a

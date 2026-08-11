@@ -10,6 +10,8 @@ import {
   openRuntimeCache,
   storeRuntimeAsset,
 } from './runtime-cache.ts';
+import { verifyAssetBytes } from './integrity.ts';
+import type { RuntimeDigests } from './integrity.ts';
 import { RUNTIME_ASSETS } from './runtime-manifest.ts';
 
 /**
@@ -32,13 +34,16 @@ export function resolveRuntimeAsset(
  * Builds an actionable failure for a runtime binary that could not be loaded: it
  * names the URL that failed and points at runtimeBaseUrl, which is almost always
  * the cause (assets not hosted, or the base set wrong). The daemon binaries to
- * host are listed in RUNTIME_ASSET_FILES.
+ * host are listed in RUNTIME_ASSET_FILES. Pass the underlying error as `cause`
+ * when one is available (for example a fetch() rejection), so a network or CORS
+ * failure stays distinguishable from a plain non-ok response in the console.
  */
-export function runtimeAssetError(url: string): WavelengthError {
+export function runtimeAssetError(url: string, cause?: unknown): WavelengthError {
   return new WavelengthError(
     `Wavelength runtime asset could not be loaded from ${url}. Host the daemon ` +
       'runtime assets (RUNTIME_ASSET_FILES) and point runtimeBaseUrl at them.',
     'asset_load_failed',
+    { cause },
   );
 }
 
@@ -47,37 +52,126 @@ export function runtimeAssetError(url: string): WavelengthError {
  * worker raises it inside its own scope, where the code cannot cross
  * postMessage, so the client recovers the classification from the text. This
  * string is the SDK's own, but the worker is plain JS and cannot import
- * runtimeAssetError: the literal is hand-copied in wavewalletdk-worker.js at the
- * fetch throws (the response was not ok). Those copies are the wording of
- * record; keep this regex in sync with them, not only with runtimeAssetError
+ * runtimeAssetError: the literal is hand-copied at every throw site in
+ * wavewalletdk-worker.js's fetch paths, not just one, and there is no single
+ * source of truth for that count. Those copies are the wording of record;
+ * keep this regex in sync with them, not only with runtimeAssetError
  * here. A wasm that fetched but will not instantiate is deliberately left out:
  * the asset arrived, so the worker throws a distinct "failed to instantiate"
  * message that stays a generic error, matching the main-thread path, which lets
  * the raw instantiate failure propagate rather than recode it as asset_load_failed.
+ * A sibling phrase, "failed integrity verification", covers digest
+ * mismatches; see {@link isRuntimeIntegrityMessage} in integrity.ts.
  */
 export function isRuntimeAssetMessage(message: string): boolean {
   return /runtime asset could not be loaded/i.test(message);
 }
 
+// Per-document cache of in-flight and completed script loads, keyed on the
+// original asset URL plus whether this call verifies (digests !== null).
+// Executing from a blob URL (below) means there is no <script src> left to
+// query for synchronously, unlike the <script src> loading this replaced,
+// where the querySelector check and the append that satisfied it were both
+// synchronous, so a concurrent call could never observe the gap between
+// them. Fetching, verifying, and blob-executing all await, opening exactly
+// that gap: two callers racing for the same URL (for example two
+// MainThreadWavelengthClient instances, or React StrictMode's double-invoked
+// effects) would otherwise both fetch and both execute the script,
+// redefining its globals out from under whichever ran first. The verifying
+// flag is part of the key, not just the URL, so a client constructed with
+// runtimeIntegrity: false can never win a race and hand its unverified load
+// to a client on the same page that expects verification: resolveIntegrityDigests
+// only ever returns null or the shared RUNTIME_ASSET_DIGESTS constant, so this
+// is exact, not a fingerprint. Keying on the `document` object rather than
+// caching module-globally scopes the cache to one page's lifetime without
+// needing an explicit reset.
+const scriptLoads = new WeakMap<Document, Map<string, Promise<void>>>();
+
+function scriptLoadKey(url: string, digests: RuntimeDigests | null): string {
+  return `${digests ? 'verify' : 'skip'}:${url}`;
+}
+
 /**
- * Injects a `<script>` tag for the given source and resolves once it loads. A
- * second call for an already-present src resolves immediately, so the same asset
- * is never loaded twice.
+ * Fetches a runtime bootstrap script, verifies its bytes against the pinned
+ * digest table (unless digests is null, meaning runtimeIntegrity: false),
+ * and executes it via a <script> pointed at a blob URL. Executing from a
+ * blob means the script cannot resolve siblings from its own location, so
+ * callers must pre-set any location-derived globals the script needs (the
+ * sqlite bridge globals in loadRuntime). A second call for the same URL and
+ * the same verification mode, whether already resolved or still in flight,
+ * returns the same promise rather than fetching and executing again; see the
+ * scriptLoads comment for why the previous DOM-query dedupe could not
+ * survive the awaits this function makes, and why verification mode is part
+ * of the dedupe key.
  */
-export function loadScript(src: string): Promise<void> {
-  const existing = document.querySelector(`script[src="${src}"]`);
-  if (existing) {
-    return Promise.resolve();
+export function loadVerifiedScript(
+  url: string,
+  name: string,
+  digests: RuntimeDigests | null,
+): Promise<void> {
+  let loads = scriptLoads.get(document);
+  if (!loads) {
+    loads = new Map();
+    scriptLoads.set(document, loads);
   }
 
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = false;
-    script.onload = () => resolve();
-    script.onerror = () => reject(runtimeAssetError(src));
-    document.head.append(script);
+  const key = scriptLoadKey(url, digests);
+  const pending = loads.get(key);
+  if (pending) {
+    return pending;
+  }
+
+  const promise = loadVerifiedScriptUncached(url, name, digests).catch(
+    (err: unknown) => {
+      // A failed load must not poison future attempts (a transient network
+      // blip should be retriable), so only a successful load stays cached.
+      loads.delete(key);
+      throw err;
+    },
+  );
+  loads.set(key, promise);
+
+  return promise;
+}
+
+async function loadVerifiedScriptUncached(
+  url: string,
+  name: string,
+  digests: RuntimeDigests | null,
+): Promise<void> {
+  // fetch() rejects on a network or CORS failure rather than resolving with a
+  // non-ok response, unlike the <script src> loading this replaced; without
+  // this catch that rejection would propagate as a raw, uncoded error instead
+  // of the documented asset_load_failed.
+  const response = await fetch(url).catch((err: unknown) => {
+    throw runtimeAssetError(url, err);
   });
+  if (!response.ok) {
+    throw runtimeAssetError(url);
+  }
+  const bytes = await response.arrayBuffer().catch((err: unknown) => {
+    throw runtimeAssetError(url, err);
+  });
+  if (digests) {
+    await verifyAssetBytes(bytes, name, url, digests);
+  }
+
+  const blobUrl = URL.createObjectURL(
+    new Blob([bytes], { type: 'text/javascript' }),
+  );
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.async = false;
+      script.dataset.wavelengthSrc = url;
+      script.onload = () => resolve();
+      script.onerror = () => reject(runtimeAssetError(url));
+      script.src = blobUrl;
+      document.head.append(script);
+    });
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
 }
 
 /**
@@ -142,16 +236,20 @@ function concatChunks(chunks: Uint8Array<ArrayBuffer>[]): Uint8Array<ArrayBuffer
  * undefined when nothing usable is cached.
  *
  * The cache always holds decompressed wasm, so this is a plain read and
- * instantiate with no sniffing. Bytes that fail to instantiate are evicted and
- * reported as a miss, which lets the caller fall back to the network: a
- * truncated or otherwise broken entry must not be able to wedge the wallet on
- * every subsequent load.
+ * instantiate with no sniffing. Cached bytes are verified against the pinned
+ * digest exactly like a freshly fetched response: Cache Storage is writable by
+ * any same-origin script, so trusting a hit unconditionally would turn it into
+ * a bypass for the whole feature. Bytes that fail to instantiate, or fail
+ * verification, are evicted and reported as a miss, which lets the caller fall
+ * back to the network: a truncated, tampered, or otherwise broken entry must
+ * not be able to wedge the wallet on every subsequent load.
  */
 async function instantiateCachedWasm(
   cache: Cache,
   url: string,
   path: string,
   importObject: WebAssembly.Imports,
+  digests: RuntimeDigests | null,
   onPerformance?: WavelengthPerformanceListener,
 ) {
   const cached = await matchRuntimeAsset(cache, url);
@@ -169,6 +267,10 @@ async function instantiateCachedWasm(
         durationMs: performanceNow() - readStartedAt,
         detail: { path, bytes: bytes.byteLength },
       });
+    }
+
+    if (digests) {
+      await verifyAssetBytes(bytes, RUNTIME_ASSETS.wasm, url, digests);
     }
 
     const compileStartedAt = onPerformance ? performanceNow() : undefined;
@@ -227,28 +329,36 @@ async function peekMagic(
     }
   } finally {
     // Stops the tee holding the rest of the body for a branch nobody reads.
-    void reader.cancel();
+    // Cancelling a reader whose stream already errored (the read above threw)
+    // rejects with that same error; the caller already has it from the read,
+    // so this is deliberately swallowed rather than left to surface as an
+    // unhandled rejection.
+    reader.cancel().catch(() => undefined);
   }
 
   return concatChunks(chunks);
 }
 
 /**
- * Fetches one runtime asset and instantiates it, inflating first when its bytes
- * are gzip.
+ * Fetches one runtime asset, verifies it, and instantiates it, inflating first
+ * when its bytes are gzip.
  *
  * The response's own Content-Type is deliberately not consulted.
- * `instantiateStreaming` requires `application/wasm` and hosts are unreliable
- * about sending it, so the body is rewrapped in a response this module labels
- * itself. That is also what keeps the compressed path streaming: inflated bytes
- * feed compilation as they arrive rather than being buffered whole first.
+ * Content-Encoding is not a CORS-safelisted response header and hosts are
+ * unreliable about labelling bodies correctly, so the first bytes are read
+ * directly to tell gzip from raw wasm.
  *
- * `path` only tags the performance samples; it never selects behavior.
+ * Bytes are hashed before instantiation, so the full body is buffered here
+ * rather than streamed into the compiler: verifying a digest requires the
+ * complete ArrayBuffer, and there is no way to check bytes the compiler has
+ * already consumed. `path` only tags the performance samples; it never
+ * selects behavior.
  */
 export async function instantiateRuntimeAsset(
   url: string,
   path: string,
   importObject: WebAssembly.Imports,
+  digests: RuntimeDigests | null,
   onPerformance?: WavelengthPerformanceListener,
   runtimeCache = true,
 ) {
@@ -261,6 +371,7 @@ export async function instantiateRuntimeAsset(
       url,
       path,
       importObject,
+      digests,
       onPerformance,
     );
     if (cached) {
@@ -269,7 +380,12 @@ export async function instantiateRuntimeAsset(
   }
 
   const fetchStartedAt = onPerformance ? performanceNow() : undefined;
-  const response = await fetch(url);
+  // See loadVerifiedScript's matching comment: fetch() rejects on a network
+  // or CORS failure instead of resolving with a non-ok response, so that
+  // rejection needs converting to the documented asset_load_failed too.
+  const response = await fetch(url).catch((err: unknown) => {
+    throw runtimeAssetError(url, err);
+  });
   if (fetchStartedAt !== undefined) {
     reportPerformance(onPerformance, {
       stage: 'runtime',
@@ -288,7 +404,11 @@ export async function instantiateRuntimeAsset(
     );
   }
 
-  const prefix = await peekMagic(response, MAGIC_BYTES);
+  const prefix = await peekMagic(response, MAGIC_BYTES).catch(
+    (err: unknown) => {
+      throw runtimeAssetError(url, err);
+    },
+  );
   const gzipped = startsWith(prefix, GZIP_MAGIC);
   if (!gzipped && !startsWith(prefix, WASM_MAGIC)) {
     // Neither magic number: whatever this is, it is not a runtime binary. Fail
@@ -307,32 +427,17 @@ export async function instantiateRuntimeAsset(
     ? response.body.pipeThrough(new DecompressionStream('gzip'))
     : response.body;
 
-  // The cache holds decompressed wasm whatever arrived on the wire, and here
-  // that is structural rather than something a flag has to keep true: the split
-  // is downstream of the DecompressionStream, so there is no path on which
-  // compressed bytes reach the cache. tee() is a native split and the copy is
-  // drained concurrently, so it neither crosses JS per chunk nor accumulates
-  // the module behind an unread branch. Only taken when there is a cache to
-  // fill, so a consumer without one pays nothing.
-  let source = body;
-  let collected: Promise<ArrayBuffer> | undefined;
-  if (cache) {
-    const [toCompile, toCache] = body.tee();
-    source = toCompile;
-    collected = new Response(toCache).arrayBuffer();
-    // Handled at creation, not where it is consumed below. A body that errors
-    // mid-download errors both tee branches, so the compile rejects and this
-    // function throws before the store site is ever reached, which would leave
-    // this promise rejected and unhandled on exactly the flaky-network path the
-    // fallback exists to survive. Losing the cache copy is the whole cost.
-    void collected.catch(() => undefined);
+  // The digest pins the decompressed binary, so the same RUNTIME_ASSETS.wasm
+  // entry verifies bytes fetched from either the compressed or the raw URL.
+  const bytes = await new Response(body).arrayBuffer().catch((err: unknown) => {
+    throw runtimeAssetError(url, err);
+  });
+  if (digests) {
+    await verifyAssetBytes(bytes, RUNTIME_ASSETS.wasm, url, digests);
   }
 
   const compileStartedAt = onPerformance ? performanceNow() : undefined;
-  const instantiated = await WebAssembly.instantiateStreaming(
-    new Response(source, { headers: { 'content-type': 'application/wasm' } }),
-    importObject,
-  );
+  const instantiated = await WebAssembly.instantiate(bytes, importObject);
   // Reported on success only. A failed asset falls through to the next one,
   // which reports its own compile, so reporting here too would put a timing for
   // abandoned work into the same distribution.
@@ -341,18 +446,16 @@ export async function instantiateRuntimeAsset(
       stage: 'runtime',
       phase: 'wasmCompileInstantiate',
       durationMs: performanceNow() - compileStartedAt,
-      detail: { path, streaming: true, body: gzipped ? 'gzip' : 'wasm' },
+      detail: { path, streaming: false, body: gzipped ? 'gzip' : 'wasm' },
     });
   }
 
-  // Stored only now that the module has compiled, so bytes that turn out not to
-  // instantiate can never become the entry every later load reads. Not awaited:
-  // filling the cache must not slow down the load that fills it.
-  if (cache && collected) {
-    void collected.then(
-      (bytes) => storeRuntimeAsset(cache, url, new Response(bytes)),
-      () => undefined,
-    );
+  // Stored only now that the module has both verified and compiled, so bytes
+  // that turn out tampered or broken can never become the entry every later
+  // load reads. Not awaited: filling the cache must not slow down the load
+  // that fills it.
+  if (cache) {
+    void storeRuntimeAsset(cache, url, new Response(bytes));
   }
 
   return instantiated;
@@ -366,11 +469,15 @@ export async function instantiateRuntimeAsset(
  * Both assets go through the same loader, which identifies what it actually
  * received rather than trusting the URL or the headers, so a host that serves
  * either file pre-inflated, double-labelled, or behind a transport that decodes
- * for it still lands on one code path.
+ * for it still lands on one code path. An integrity mismatch on the compressed
+ * path does not fall back to the raw one: the raw path would refetch the same
+ * content from the same origin, turning a tamper signal into a confusing
+ * second failure.
  */
 export async function instantiateWasm(
   importObject: WebAssembly.Imports,
   base: string | undefined,
+  digests: RuntimeDigests | null,
   onPerformance?: WavelengthPerformanceListener,
   runtimeCache = true,
 ) {
@@ -386,11 +493,25 @@ export async function instantiateWasm(
         resolveRuntimeAsset(base, RUNTIME_ASSETS.wasmGz),
         'gzip',
         importObject,
+        digests,
         onPerformance,
         runtimeCache,
       );
     } catch (err) {
-      console.warn(`compressed wasm load failed: ${errorMessage(err)}`);
+      if (
+        err instanceof WavelengthError &&
+        err.code === 'asset_integrity_failed'
+      ) {
+        throw err;
+      }
+      // A body-read failure (a dropped connection after headers arrived) is
+      // reported through the same generic asset_load_failed message as a
+      // missing host, so surface the underlying cause here too, when there
+      // is one, rather than losing the actual reason on every gzip fallback.
+      const causeMessage =
+        err instanceof Error && err.cause ? errorMessage(err.cause) : '';
+      const detail = causeMessage ? ` (${causeMessage})` : '';
+      console.warn(`compressed wasm load failed: ${errorMessage(err)}${detail}`);
       path = 'raw';
     }
 
@@ -398,6 +519,7 @@ export async function instantiateWasm(
       resolveRuntimeAsset(base, RUNTIME_ASSETS.wasm),
       'raw',
       importObject,
+      digests,
       onPerformance,
       runtimeCache,
     );

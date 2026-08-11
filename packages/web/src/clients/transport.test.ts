@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it, mock } from 'node:test';
 
 // Web source is intentionally bundler-oriented and uses extensionless internal
 // imports. Teach node:test to resolve those source imports while it evaluates
@@ -51,6 +51,25 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   });
 
   return { promise, resolve };
+}
+
+// loadVerifiedScript executes each bootstrap script via a <script src>
+// pointed at a blob URL; this stub "runs" it by resolving onload on the
+// next microtask, same as runtime.test.ts's stubDocument.
+function stubDocument(): { baseURI: string; createElement: () => unknown; head: { append: (el: { onload?: () => void }) => void } } {
+  return {
+    baseURI: 'https://x/',
+    createElement: () => {
+      const el: { dataset: Record<string, string>; onload?: () => void } = {
+        dataset: {},
+      };
+      return el;
+    },
+    head: {
+      append: (el: { onload?: () => void }) =>
+        queueMicrotask(() => el.onload?.()),
+    },
+  };
 }
 
 class FakeWorker {
@@ -1179,17 +1198,20 @@ describe('activity transport requests', () => {
       exitRuntime = reject;
     });
     stub('navigator', locks.navigator);
-    // A querySelector hit makes loadScript resolve without a real <script>.
-    stub('document', { querySelector: () => ({}), baseURI: 'https://x/' });
+    stub('document', stubDocument());
     stub('Go', class {
       importObject = {};
       run() {
         return runPromise;
       }
     });
-    // The loader identifies the asset by its magic number and streams it, so
-    // the stub has to be a real response with a body rather than a bag with an
-    // arrayBuffer(). Raw wasm magic keeps it on the uncompressed path.
+    // The loader identifies the asset by its magic number, so the stub has to
+    // be a real Response with a body rather than a bag with an arrayBuffer().
+    // Raw wasm magic plus no DecompressionStream forces the uncompressed
+    // path, which buffers the response into an ArrayBuffer and instantiates
+    // it directly against the stubbed WebAssembly.instantiate below;
+    // runtimeIntegrity is disabled (see the client construction below) so the
+    // stubbed placeholder bytes do not fail digest verification.
     stub('DecompressionStream', undefined);
     stub(
       'fetch',
@@ -1209,7 +1231,13 @@ describe('activity transport requests', () => {
     });
 
     try {
-      const client = new MainThreadWavelengthClient({ runtimeBaseUrl: 'https://x/' });
+      const client = new MainThreadWavelengthClient({
+        runtimeBaseUrl: 'https://x/',
+        // The stubbed fetch returns placeholder bytes, not the real runtime
+        // asset content, so integrity verification is disabled: this test
+        // exercises the runtime-exit path, not digest checking.
+        runtimeIntegrity: false,
+      });
       const events: string[] = [];
       client.subscribe((event) => events.push(event.type));
 
@@ -1264,6 +1292,7 @@ describe('activity transport requests', () => {
       navigator: (globalThis as { navigator?: unknown }).navigator,
       document: (globalThis as { document?: unknown }).document,
       Go: (globalThis as { Go?: unknown }).Go,
+      fetch: globalThis.fetch,
       addEventListener: globalThis.addEventListener,
       removeEventListener: globalThis.removeEventListener,
       call: (globalThis as { wavewalletdkCall?: unknown }).wavewalletdkCall,
@@ -1273,17 +1302,33 @@ describe('activity transport requests', () => {
       Object.defineProperty(globalThis, name, { configurable: true, value });
     locks.navigator satisfies object;
     stub('navigator', locks.navigator);
-    // loadScript resolves via the querySelector hit; the missing Go
-    // constructor then fails the boot with a bare, uncoded WavelengthError,
-    // the shape that a code-classification release keeps missing.
-    stub('document', { querySelector: () => ({}), baseURI: 'https://x/' });
+    // loadVerifiedScript executes each bootstrap script via a <script src>
+    // pointed at a blob URL, "run" here by resolving onload on the next
+    // microtask (same stubDocument as the runtime-exit test above); the
+    // missing Go constructor then fails the boot with a bare, uncoded
+    // WavelengthError, the shape that a code-classification release keeps
+    // missing. The failure happens before instantiateWasm is ever reached,
+    // so no wasm fetch or DecompressionStream stub is needed.
+    stub('document', stubDocument());
+    stub(
+      'fetch',
+      async () =>
+        new Response(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0])),
+    );
     stub('Go', undefined);
     stub('wavewalletdkCall', undefined);
     stub('addEventListener', () => undefined);
     stub('removeEventListener', () => undefined);
 
     try {
-      const client = new MainThreadWavelengthClient({ runtimeBaseUrl: 'https://x/' });
+      const client = new MainThreadWavelengthClient({
+        runtimeBaseUrl: 'https://x/',
+        // The stubbed fetch returns placeholder bytes, not the real runtime
+        // asset content, so integrity verification is disabled: without this
+        // the first bootstrap script fails its digest check and the test
+        // never reaches the missing-Go path its comment describes.
+        runtimeIntegrity: false,
+      });
       await assert.rejects(
         client.start({ network: 'regtest', arkServerAddress: 'h:7070' }),
       );
@@ -2492,4 +2537,163 @@ describe('activity transport requests', () => {
       });
     }
   });
+});
+
+describe('runtime integrity option', () => {
+  // firstPostedMessage reads the $init message the WorkerWavelengthClient
+  // constructor posts to the FakeWorker it just spawned; it is always the
+  // first message on the latest instance.
+  function firstPostedMessage(): WorkerMessage {
+    return FakeWorker.latest!.messages[0];
+  }
+
+  afterEach(async () => {
+    const { resetIntegrityDisabledWarning } = await import('../integrity.ts');
+    resetIntegrityDisabledWarning();
+    mock.restoreAll();
+  });
+
+  it('sends the pinned digest table in $init by default', async () => {
+    const { WorkerWavelengthClient } = await import('./worker.ts');
+    const { RUNTIME_ASSET_DIGESTS } = await import('../runtime-manifest.ts');
+    const savedWorker = (globalThis as { Worker?: unknown }).Worker;
+    Object.defineProperty(globalThis, 'Worker', { configurable: true, value: FakeWorker });
+
+    try {
+      const client = new WorkerWavelengthClient({ workerURL: 'fake-worker.js' });
+      const init = firstPostedMessage() as {
+        $init: { assetDigests: unknown };
+      };
+      assert.equal(init.$init.assetDigests, RUNTIME_ASSET_DIGESTS);
+      client.dispose();
+    } finally {
+      Object.defineProperty(globalThis, 'Worker', { configurable: true, value: savedWorker });
+    }
+  });
+
+  it('sends a null digest table and warns when integrity is disabled', async () => {
+    const { WorkerWavelengthClient } = await import('./worker.ts');
+    const savedWorker = (globalThis as { Worker?: unknown }).Worker;
+    Object.defineProperty(globalThis, 'Worker', { configurable: true, value: FakeWorker });
+
+    try {
+      const warn = mock.method(console, 'warn', () => undefined);
+      const client = new WorkerWavelengthClient({
+        workerURL: 'fake-worker.js',
+        runtimeIntegrity: false,
+      });
+      const init = firstPostedMessage() as {
+        $init: { assetDigests: unknown };
+      };
+      assert.equal(init.$init.assetDigests, null);
+      assert.equal(warn.mock.callCount(), 1);
+      client.dispose();
+    } finally {
+      Object.defineProperty(globalThis, 'Worker', { configurable: true, value: savedWorker });
+    }
+  });
+
+  it('threads runtimeIntegrity through createWebWalletEngine', async () => {
+    const { createWebWalletEngine } = await import('../index.ts');
+    const savedWorker = (globalThis as { Worker?: unknown }).Worker;
+    Object.defineProperty(globalThis, 'Worker', { configurable: true, value: FakeWorker });
+
+    try {
+      const engine = createWebWalletEngine({
+        workerURL: 'fake-worker.js',
+        runtimeIntegrity: false,
+      });
+      const init = firstPostedMessage() as {
+        $init: { assetDigests: unknown };
+      };
+      assert.equal(init.$init.assetDigests, null);
+      engine.dispose();
+    } finally {
+      Object.defineProperty(globalThis, 'Worker', { configurable: true, value: savedWorker });
+    }
+  });
+
+  it('classifies a worker integrity message as asset_integrity_failed', async () => {
+    const { WorkerWavelengthClient } = await import('./worker.ts');
+    const savedWorker = (globalThis as { Worker?: unknown }).Worker;
+    const savedNavigator = (globalThis as { navigator?: unknown }).navigator;
+    const locks = grantingLocks();
+
+    // The worker's fetched runtime bytes do not match the pinned digest, so no
+    // daemon ever exists and no database is ever opened, exactly the shape of
+    // the asset_load_failed worker never loaded above but with the integrity
+    // phrasing instead.
+    class IntegrityFailingWorker extends FakeWorker {
+      postMessage(message: WorkerMessage): void {
+        this.messages.push(message);
+        if (typeof message.id === 'number') {
+          queueMicrotask(() =>
+            this.onmessage?.({
+              data: {
+                id: message.id,
+                ok: false,
+                error:
+                  'Wavelength runtime asset at https://x/a.js failed integrity ' +
+                  'verification (expected sha256-abc).',
+              },
+            } as MessageEvent),
+          );
+        }
+      }
+    }
+
+    Object.defineProperty(globalThis, 'Worker', {
+      configurable: true,
+      value: IntegrityFailingWorker,
+    });
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: locks.navigator });
+
+    try {
+      const client = new WorkerWavelengthClient({ workerURL: 'fake-worker.js' });
+      await assert.rejects(
+        client.start({ network: 'regtest', arkServerAddress: 'h:7070' }),
+        (err: unknown) => {
+          assert.equal((err as { code?: string }).code, 'asset_integrity_failed');
+
+          return true;
+        },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Holding here would lock the whole origin out of a wallet that never
+      // started, for as long as this tab stays open.
+      assert.equal(
+        locks.state.released,
+        true,
+        'a runtime that failed integrity verification cannot be holding a database',
+      );
+      client.dispose();
+    } finally {
+      Object.defineProperty(globalThis, 'Worker', { configurable: true, value: savedWorker });
+      Object.defineProperty(globalThis, 'navigator', { configurable: true, value: savedNavigator });
+    }
+  });
+
+  // grantingLocks stubs navigator.locks with a lock that is always available,
+  // reporting when the holder lets it go. Duplicated from the activity
+  // transport describe block above (that copy is module-private to it), so
+  // this integrity classification test does not need to reach across blocks.
+  function grantingLocks() {
+    const state = { released: false, requests: 0 };
+    const locks = {
+      request: (
+        _name: string,
+        _options: unknown,
+        callback: (lock: unknown) => unknown,
+      ) => {
+        state.requests += 1;
+
+        return Promise.resolve(callback({ name: 'lock' })).then(() => {
+          state.released = true;
+        });
+      },
+    };
+
+    return { state, navigator: { locks } };
+  }
 });

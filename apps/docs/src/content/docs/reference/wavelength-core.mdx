@@ -361,7 +361,8 @@ are loaded and the client is otherwise usable. Always await this before
 
 <Returns type="Promise<void>">
 Resolves when the client is ready to `start()`. Rejects with a `WavelengthError`
-(code `asset_load_failed`) if the runtime assets fail to load.
+if the runtime assets fail to load (code `asset_load_failed`) or fail digest
+verification (code `asset_integrity_failed`).
 </Returns>
 
 </ApiSymbol>
@@ -2843,6 +2844,7 @@ export const errorCodeSig = `type WavelengthErrorCode =
   | 'wavelength_error'
   | 'runtime_not_ready'
   | 'asset_load_failed'
+  | 'asset_integrity_failed'
   | 'worker_error'
   | 'wallet_locked'
   | 'runtime_lock_unavailable'
@@ -2882,6 +2884,7 @@ codes.
 | `wavelength_error` | The generic default: any SDK error without a more specific code, and daemon-originated failures today, except recognized storage-contention messages on `start()` that map to `wallet_locked`. |
 | `runtime_not_ready` | The wasm runtime is not callable: it exited before signaling ready, or its call entry point is missing once loading has finished. |
 | `asset_load_failed` | `ready()` fails to load the runtime assets (wasm binary or its supporting files). |
+| `asset_integrity_failed` | A runtime asset was downloaded in full and recognized as a runtime asset, but its bytes did not match the pinned digest. `asset_load_failed` covers most other ways a runtime asset failed to reach a usable state, including a body that does not look like a runtime asset at all, or, on the main thread, an already-verified script blocked from executing. In the default worker transport that block reaches the client as an unrecognized browser message and surfaces as `wavelength_error`, as does a downloaded, verified module that fails to compile, which is not an asset problem. |
 | `worker_error` | The worker transport's underlying Worker fails or crashes. |
 | `wallet_locked` | The wallet is already running in another tab or window of the same origin. The daemon's browser storage is exclusive to one runtime, so `start()` fails immediately rather than corrupting or losing data. Unrelated to the `locked` phase, which means a wallet on this device is waiting to be unlocked. |
 | `runtime_lock_unavailable` | The browser refused or dropped the runtime lock request itself (for example while the document is shutting down). Unlike `wallet_locked`, this says nothing about another tab holding the wallet. |

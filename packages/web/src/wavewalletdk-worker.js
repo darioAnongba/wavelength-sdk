@@ -20,6 +20,11 @@ let runtimeVersion = "";
 // existing one is left exactly as it is.
 let runtimeCacheEnabled = true;
 
+// The pinned digest table from $init, or null when the client disabled
+// verification (runtimeIntegrity: false). Mirrors RUNTIME_ASSET_DIGESTS as
+// resolved by the client; this file cannot import the TS manifest.
+let assetDigests = null;
+
 // debug mirrors the client's debug option, set from the $init message. When on,
 // every RPC request/response is logged - payloads can include addresses and
 // amounts, so it stays off unless the consumer opts in.
@@ -58,6 +63,18 @@ function resolveRuntimeAsset(name) {
   ).href;
 }
 
+// Mirrors runtimeAssetError in packages/web/src/runtime.ts, hand-copied
+// because this worker is plain JS and cannot import it. Builds the message
+// the client's isRuntimeAssetMessage regex matches; keep the wording in sync
+// with both.
+function assetLoadError(url, cause) {
+  return new Error(
+    `Wavelength runtime asset could not be loaded from ${url}. Host the ` +
+      "daemon runtime assets and point runtimeBaseUrl at them.",
+    cause !== undefined ? { cause } : undefined,
+  );
+}
+
 function postEvent(type, payload) {
   self.postMessage({
     event: {
@@ -92,6 +109,7 @@ self.onmessage = async (event) => {
     runtimeCacheEnabled = data.$init.runtimeCache !== false;
     debug = !!data.$init.debug;
     performanceEnabled = !!data.$init.performance;
+    assetDigests = data.$init.assetDigests || null;
 
     return;
   }
@@ -182,6 +200,81 @@ async function ensureLoaded() {
   await loadPromise;
 }
 
+// Mirrors sha256Sri in packages/web/src/integrity.ts, including the guard:
+// worker mode does not require a secure context the way OPFS persistence
+// does, so a plain-HTTP host reaches this function with no crypto.subtle,
+// and without the guard the digest call throws an opaque, uncoded TypeError
+// instead of this actionable message.
+async function sha256Sri(bytes) {
+  if (!crypto?.subtle) {
+    throw new Error(
+      "Wavelength runtime integrity verification requires crypto.subtle, " +
+        "which is only available in secure contexts (https or localhost).",
+    );
+  }
+
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  let binary = "";
+  for (const byte of new Uint8Array(digest)) {
+    binary += String.fromCharCode(byte);
+  }
+  return `sha256-${btoa(binary)}`;
+}
+
+// Mirrors verifyAssetBytes in packages/web/src/integrity.ts. The "failed
+// integrity verification" phrase is the wording of record for the client's
+// isRuntimeIntegrityMessage; keep it in sync. A missing table entry fails
+// closed.
+async function verifyAssetBytes(bytes, name, url) {
+  if (!assetDigests) {
+    return;
+  }
+  const expected = assetDigests[name];
+  const detail = expected
+    ? `expected ${expected}`
+    : `no digest pinned for ${name}`;
+  if (!expected || (await sha256Sri(bytes)) !== expected) {
+    throw new Error(
+      `Wavelength runtime asset at ${url} failed integrity verification ` +
+        `(${detail}). The hosted asset set most likely does not match the ` +
+        "daemon release this SDK version is pinned to " +
+        "(RUNTIME_MANIFEST_VERSION); redeploy the matching release assets.",
+    );
+  }
+}
+
+// Fetches, verifies, and executes a bootstrap script from a blob URL.
+// importScripts has no integrity support, so the bytes are hashed by hand;
+// executing from a blob also means the script cannot resolve siblings from
+// its own URL, which the sqliteBridge* globals set in loadRuntime cover.
+async function importVerifiedScript(name) {
+  const url = resolveRuntimeAsset(name);
+  // fetch() rejects on a network or CORS failure rather than resolving with a
+  // non-ok response, unlike importScripts's own error handling; without this
+  // catch that rejection would surface as a raw, uncoded error instead of the
+  // documented asset_load_failed. The rejection rides along as the cause, the
+  // way the main-thread mirror does: it is the only record of whether this was
+  // DNS, a refused connection, or CORS.
+  const response = await fetch(url).catch((err) => {
+    throw assetLoadError(url, err);
+  });
+  if (!response.ok) {
+    throw assetLoadError(url);
+  }
+  const bytes = await response.arrayBuffer().catch((err) => {
+    throw assetLoadError(url, err);
+  });
+  await verifyAssetBytes(bytes, name, url);
+  const blobUrl = URL.createObjectURL(
+    new Blob([bytes], { type: "text/javascript" }),
+  );
+  try {
+    importScripts(blobUrl);
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+}
+
 async function loadRuntime() {
   if (typeof self.CustomEvent !== "function") {
     self.CustomEvent = class CustomEvent extends Event {
@@ -200,13 +293,13 @@ async function loadRuntime() {
   self.sqliteBridgeSQLiteJSURL = resolveRuntimeAsset("sqlite3.js");
 
   const sqliteStartedAt = performanceEnabled ? performanceNow() : undefined;
-  importScripts(resolveRuntimeAsset("sqlite-bridge.js"));
+  await importVerifiedScript("sqlite-bridge.js");
   postPerformance("sqliteBridgeScript", sqliteStartedAt, {
     transport: "worker",
   });
 
   const goScriptStartedAt = performanceEnabled ? performanceNow() : undefined;
-  importScripts(resolveRuntimeAsset("wasm_exec.js"));
+  await importVerifiedScript("wasm_exec.js");
   postPerformance("wasmExecScript", goScriptStartedAt, {
     transport: "worker",
   });
@@ -328,10 +421,14 @@ async function storeRuntimeAsset(cache, url, response) {
 }
 
 // instantiateCachedWasm instantiates a copy stored by an earlier visit, or
-// returns undefined when there is nothing usable cached. The cache always holds
-// decompressed wasm, whatever encoding it arrived in, so this is a plain read
-// and instantiate. Bytes that fail to instantiate are evicted and reported as a
-// miss so a broken entry cannot wedge every later load.
+// returns undefined when there is nothing usable cached. The cache always
+// holds decompressed wasm, whatever encoding it arrived in, so this is a
+// plain read and instantiate. Cached bytes are verified against the pinned
+// digest exactly like a freshly fetched response: Cache Storage is writable
+// by any same-origin script, so trusting a hit unconditionally would turn it
+// into a bypass for the whole feature. Bytes that fail to instantiate, or
+// fail verification, are evicted and reported as a miss so a broken entry
+// cannot wedge every later load.
 async function instantiateCachedWasm(cache, url, path, importObject) {
   let cached;
   try {
@@ -350,6 +447,8 @@ async function instantiateCachedWasm(cache, url, path, importObject) {
       path,
       bytes: bytes.byteLength,
     });
+
+    await verifyAssetBytes(bytes, "wavewalletdk.wasm", url);
 
     const compileStartedAt = performanceEnabled ? performanceNow() : undefined;
     const instantiated = await WebAssembly.instantiate(bytes, importObject);
@@ -420,7 +519,11 @@ async function peekMagic(response, size) {
     }
   } finally {
     // Stops the tee holding the rest of the body for a branch nobody reads.
-    void reader.cancel();
+    // Cancelling a reader whose stream already errored (the read above threw)
+    // rejects with that same error; the caller already has it from the read,
+    // so this is deliberately swallowed rather than left to surface as an
+    // unhandled rejection.
+    reader.cancel().catch(() => undefined);
   }
 
   let total = 0;
@@ -437,11 +540,15 @@ async function peekMagic(response, size) {
   return joined;
 }
 
-// instantiateRuntimeAsset fetches one asset and instantiates it, inflating
-// first when its bytes are gzip. The response's own Content-Type is not
-// consulted: instantiateStreaming requires application/wasm and hosts are
-// unreliable about sending it, so the body is rewrapped in a response labelled
-// here. That also keeps the compressed path streaming.
+// instantiateRuntimeAsset fetches one asset, verifies it, and instantiates it,
+// inflating first when its bytes are gzip. The response's own Content-Type is
+// not consulted: Content-Encoding is not a CORS-safelisted response header
+// and hosts are unreliable about labelling bodies correctly, so the first
+// bytes are read directly to tell gzip from raw wasm. Bytes are hashed before
+// instantiation, so the full body is buffered here rather than streamed into
+// the compiler: verifying a digest requires the complete ArrayBuffer, and
+// there is no way to check bytes the compiler has already consumed. Mirrors
+// runtime.ts; keep the two in sync.
 async function instantiateRuntimeAsset(url, path, importObject) {
   const cache = await openRuntimeCache();
   if (cache) {
@@ -452,23 +559,25 @@ async function instantiateRuntimeAsset(url, path, importObject) {
   }
 
   const fetchStartedAt = performanceEnabled ? performanceNow() : undefined;
-  const response = await fetch(url);
+  // See importVerifiedScript's matching comment: fetch() rejects on a
+  // network or CORS failure instead of resolving with a non-ok response, so
+  // that rejection needs converting to the documented asset_load_failed too,
+  // carrying the underlying error as the cause.
+  const response = await fetch(url).catch((err) => {
+    throw assetLoadError(url, err);
+  });
   postPerformance("wasmFetchHeaders", fetchStartedAt, { path });
   if (!response.ok || !response.body) {
-    throw new Error(
-      `Wavelength runtime asset could not be loaded from ${url}. Host the ` +
-        "daemon runtime assets and point runtimeBaseUrl at them.",
-    );
+    throw assetLoadError(url);
   }
 
-  const prefix = await peekMagic(response, MAGIC_BYTES);
+  const prefix = await peekMagic(response, MAGIC_BYTES).catch((err) => {
+    throw assetLoadError(url, err);
+  });
   const gzipped = startsWith(prefix, GZIP_MAGIC);
   if (!gzipped && !startsWith(prefix, WASM_MAGIC)) {
     // Neither magic number: whatever this is, it is not a runtime binary.
-    throw new Error(
-      `Wavelength runtime asset could not be loaded from ${url}. Host the ` +
-        "daemon runtime assets and point runtimeBaseUrl at them.",
-    );
+    throw assetLoadError(url);
   }
   if (gzipped && !("DecompressionStream" in self)) {
     throw new Error(
@@ -481,37 +590,22 @@ async function instantiateRuntimeAsset(url, path, importObject) {
     ? response.body.pipeThrough(new DecompressionStream("gzip"))
     : response.body;
 
-  // The cache holds decompressed wasm whatever arrived on the wire, and here
-  // that is structural rather than something a flag has to keep true: the split
-  // is downstream of the DecompressionStream. tee() is native and the copy is
-  // drained concurrently, so it neither crosses JS per chunk nor accumulates
-  // the module behind an unread branch.
-  let source = body;
-  let collected;
-  if (cache) {
-    const [toCompile, toCache] = body.tee();
-    source = toCompile;
-    collected = new Response(toCache).arrayBuffer();
-    // Handled at creation, not where it is consumed below. A body that errors
-    // mid-download errors both tee branches, so the compile rejects and this
-    // function throws before the store site is ever reached, which would leave
-    // this promise rejected and unhandled on exactly the flaky-network path the
-    // fallback exists to survive. Losing the cache copy is the whole cost.
-    void collected.catch(() => undefined);
-  }
+  // The digest pins the decompressed binary, so the same "wavewalletdk.wasm"
+  // entry verifies bytes fetched from either the compressed or the raw URL.
+  const bytes = await new Response(body).arrayBuffer().catch((err) => {
+    throw assetLoadError(url, err);
+  });
+  await verifyAssetBytes(bytes, "wavewalletdk.wasm", url);
 
   const compileStartedAt = performanceEnabled ? performanceNow() : undefined;
   let instantiated;
   try {
-    instantiated = await WebAssembly.instantiateStreaming(
-      new Response(source, { headers: { "content-type": "application/wasm" } }),
-      importObject,
-    );
+    instantiated = await WebAssembly.instantiate(bytes, importObject);
   } catch (instantiateErr) {
-    // The bytes arrived and were the right shape, so this is a genuine
-    // instantiation failure rather than a missing asset. Keep it distinct from
-    // the message isRuntimeAssetMessage matches on, so the client does not
-    // recode it as asset_load_failed.
+    // The bytes arrived, verified, and were the right shape, so this is a
+    // genuine instantiation failure rather than a missing asset or a tamper.
+    // Keep it distinct from the messages isRuntimeAssetMessage and
+    // isRuntimeIntegrityMessage match on, so the client does not recode it.
     throw new Error(
       `Wavelength runtime wasm failed to instantiate from ${url}: ` +
         String(instantiateErr?.message || instantiateErr),
@@ -522,18 +616,16 @@ async function instantiateRuntimeAsset(url, path, importObject) {
   // which reports its own compile.
   postPerformance("wasmCompileInstantiate", compileStartedAt, {
     path,
-    streaming: true,
+    streaming: false,
     body: gzipped ? "gzip" : "wasm",
   });
 
-  // Stored only now that the module has compiled, so bytes that turn out not
-  // to instantiate can never become the entry every later load reads. Not
-  // awaited: filling the cache must not slow the load that fills it.
-  if (cache && collected) {
-    void collected.then(
-      (bytes) => storeRuntimeAsset(cache, url, new Response(bytes)),
-      () => undefined,
-    );
+  // Stored only now that the module has both verified and compiled, so bytes
+  // that turn out tampered or broken can never become the entry every later
+  // load reads. Not awaited: filling the cache must not slow the load that
+  // fills it.
+  if (cache) {
+    void storeRuntimeAsset(cache, url, new Response(bytes));
   }
 
   return instantiated;
@@ -554,9 +646,27 @@ async function instantiateWasm(importObject) {
         importObject,
       );
     } catch (err) {
+      // An integrity mismatch must not fall back: the raw path would refetch
+      // the same content from the same origin, turning a tamper signal into
+      // a confusing second failure. The phrase is the wording of record
+      // shared with the client's isRuntimeIntegrityMessage.
+      if (/failed integrity verification/i.test(String(err?.message || err))) {
+        throw err;
+      }
+      // A body-read failure (a dropped connection after headers arrived) is
+      // reported through the same generic asset_load_failed message as a
+      // missing host, so surface the underlying cause here too, when there
+      // is one, rather than losing the actual reason on every gzip fallback.
+      // Unlike the main thread's errorMessage(), String(x.message || x) can
+      // never resolve to "": an empty cause.message just falls through to
+      // stringifying the cause object itself. So this stays a plain
+      // truthiness check, with no empty-string guard to mirror the TS side.
+      const detail = err?.cause
+        ? ` (${String(err.cause?.message || err.cause)})`
+        : "";
       postEvent("log", {
         level: "warn",
-        message: `compressed wasm load failed: ${String(err?.message || err)}`,
+        message: `compressed wasm load failed: ${String(err?.message || err)}${detail}`,
       });
       path = "raw";
     }

@@ -76,8 +76,11 @@ If you set `runtimeBaseUrl` to point the daemon runtime binaries
 (`wavewalletdk.wasm.gz`, `wasm_exec.js`, `sqlite-*.js`) at a different origin,
 that origin must also send
 `Cross-Origin-Resource-Policy: cross-origin` on those asset responses.
-Otherwise `require-corp` blocks them from loading. See
-[Hosting runtime assets](/web/get-started/hosting-runtime-assets/) for details.
+Otherwise `require-corp` blocks them from loading. The wasm binary and the
+bootstrap scripts (`wasm_exec.js`, `sqlite-bridge.js`) are always fetched
+directly rather than loaded via `<script src>`, which additionally needs
+CORS headers on that origin. See [Hosting runtime
+assets](/web/get-started/hosting-runtime-assets/) for details.
 </Callout>
 
 **Optional: `credentialless` COEP.** Some teams use

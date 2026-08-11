@@ -9,6 +9,20 @@
  * code until the other tab stops the runtime or closes. `'runtime_lock_unavailable'`
  * means the browser refused or dropped the lock request itself (for example
  * while the document is shutting down), which says nothing about another tab.
+ * `'asset_integrity_failed'` means a runtime asset was downloaded in full,
+ * recognized as a runtime asset, but its bytes did not match the digest
+ * pinned for the SDK's paired daemon release. `'asset_load_failed'` covers
+ * most other ways a runtime asset failed to reach a usable state: not found,
+ * a network or CORS failure, a connection dropped partway through, a body
+ * that does not look like a runtime asset at all, or, on the main thread,
+ * execution of an already-verified bootstrap script blocked after the fact
+ * (for example by a Content-Security-Policy without `script-src blob:`). In
+ * the default worker transport that same block reaches the client as a
+ * browser message the SDK does not recognize, so it surfaces as the generic
+ * `'wavelength_error'` rather than `'asset_load_failed'`. Nor does
+ * `'asset_load_failed'` cover a downloaded, verified module that fails to
+ * compile, which is not an asset problem and surfaces as
+ * `'wavelength_error'` too.
  * The `(string & {})` arm keeps the union open for forward
  * compatibility while still offering autocomplete on the known codes.
  */
@@ -16,6 +30,7 @@ export type WavelengthErrorCode =
   | 'wavelength_error'
   | 'runtime_not_ready'
   | 'asset_load_failed'
+  | 'asset_integrity_failed'
   | 'worker_error'
   | 'wallet_locked'
   | 'runtime_lock_unavailable'

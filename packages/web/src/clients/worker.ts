@@ -3,7 +3,10 @@ import {
   RUNTIME_MANIFEST_VERSION,
   WavelengthError,
   WavelengthEventType,
+  validateExternalSeedWalletRequest,
   validateRuntimeConfig,
+  type ExternalSeedWalletOpenResult,
+  type ExternalSeedWalletRequest,
   type WavelengthPerformanceEvent,
   type WavelengthPerformanceListener,
 } from '@lightninglabs/wavelength-core';
@@ -25,7 +28,9 @@ import {
 } from '../integrity.ts';
 import {
   RuntimeLock,
+  RUNTIME_LOCK_NAME,
   NO_RUNTIME_LEASE,
+  externalSeedRuntimeLockName,
   isNearMissLockMessage,
   isWalletLockedMessage,
 } from '../runtime-lock.ts';
@@ -37,12 +42,14 @@ type WorkerControlMethod = '$ready' | '$startActivity' | '$stopActivity';
 
 // workerErrorCode classifies a raw failure string from the worker. The worker
 // cannot send a code across postMessage, so the text is all the client has.
-// The wallet_locked mapping is gated to the start verb: cross-context OPFS
-// contention only happens when a runtime opens the databases, so a matching
-// message on any other verb is same-runtime transient contention and must not
-// tell a sole tab to close a window that does not exist.
+// The wallet_locked mapping is gated to startup lifecycle verbs: cross-context
+// OPFS contention only happens when a runtime opens databases. A matching
+// message on another verb is same-runtime transient contention.
 function workerErrorCode(message: string, method: string): WavelengthErrorCode {
-  if (method === 'start' && isWalletLockedMessage(message)) {
+  if (
+    (method === 'start' || method === 'startExternalSeedWallet') &&
+    isWalletLockedMessage(message)
+  ) {
     return 'wallet_locked';
   }
   if (isRuntimeIntegrityMessage(message)) {
@@ -229,6 +236,15 @@ export class WorkerWavelengthClient extends BaseWavelengthClient {
     return this.enqueueLifecycle(() => this.startLocked(config));
   }
 
+  startExternalSeedWallet(
+    config: RuntimeConfig,
+    req: ExternalSeedWalletRequest,
+  ): Promise<ExternalSeedWalletOpenResult> {
+    return this.enqueueLifecycle(() =>
+      this.startExternalSeedWalletLocked(config, req),
+    );
+  }
+
   stop(): Promise<void> {
     return this.enqueueLifecycle(() =>
       // A stop that ran behind a start which then died (or any path that
@@ -239,12 +255,43 @@ export class WorkerWavelengthClient extends BaseWavelengthClient {
     );
   }
 
-  // startLocked is the serialized body of start(). It is the verb that opens the
-  // daemon's exclusive OPFS databases, so it is where the cross-tab runtime lock
-  // is taken: a second tab fails fast with wallet_locked instead of tripping
-  // over SQLite handles held by the first. Validation runs first so a config
-  // that can never reach the daemon does not take the lock at all.
-  private async startLocked(config: RuntimeConfig): Promise<WalletInfo> {
+  // Both startup wrappers enter the serialized lock body below before opening
+  // OPFS. Legacy start uses the conservative origin-global lock, while the
+  // external-seed lifecycle uses its final dataDir/network profile lock.
+  private startLocked(config: RuntimeConfig): Promise<WalletInfo> {
+    return this.startWithRuntimeLock(
+      config,
+      RUNTIME_LOCK_NAME,
+      () => super.start(config),
+      () => this.getInfo(),
+    );
+  }
+
+  private startExternalSeedWalletLocked(
+    config: RuntimeConfig,
+    req: ExternalSeedWalletRequest,
+  ): Promise<ExternalSeedWalletOpenResult> {
+    validateExternalSeedWalletRequest(req);
+    if (typeof config.dataDir !== 'string' || config.dataDir.trim() === '') {
+      return super.startExternalSeedWallet(config, req);
+    }
+
+    return this.startWithRuntimeLock(
+      config,
+      externalSeedRuntimeLockName(config.dataDir, config.network),
+      () => super.startExternalSeedWallet(config, req),
+    );
+  }
+
+  // Every verb that opens daemon databases shares this serialized acquisition
+  // path. Ordinary start may coalesce through whenRunning. External-seed
+  // startup never does because its final profile and entropy select a wallet.
+  private async startWithRuntimeLock<T>(
+    config: RuntimeConfig,
+    lockName: string,
+    startDaemon: () => Promise<T>,
+    whenRunning?: () => Promise<T>,
+  ): Promise<T> {
     validateRuntimeConfig(config, this.serverTransport);
     if (this.disposed) {
       throw new WavelengthError('Wavelength client disposed', 'worker_error');
@@ -257,15 +304,23 @@ export class WorkerWavelengthClient extends BaseWavelengthClient {
     // A redundant start on an already-running session (the double click
     // enqueueLifecycle serializes, or any host that starts twice) coalesces
     // rather than re-invoking the daemon. By here the lock is held and the
-    // runtime is up, so re-running super.start() would risk a daemon "already
-    // started" or a transient getInfo() rejection, whose teardown would kill
+    // runtime is up, so re-running the lifecycle verb would risk a daemon
+    // "already started" or a transient rejection, whose teardown would kill
     // the live worker and free the cross-tab lock for other tabs. Return the
     // current info instead, leaving the session and its lock intact. To start
     // under a different config, stop() first.
     if (this.lock.held) {
-      return this.getInfo();
+      if (whenRunning) {
+        return whenRunning();
+      }
+
+      throw new WavelengthError(
+        'a wallet runtime is already active; call stop() before starting an ' +
+          'external-seed wallet',
+        'runtime_active',
+      );
     }
-    this.lease = await this.lock.acquire();
+    this.lease = await this.lock.acquire(lockName);
     // acquire() yields even when it resolves immediately (no Web Locks), so a
     // dispose() issued in the same turn can land here. Bail before booting a
     // daemon into a client nobody can drive, releasing the lock we just took.
@@ -293,7 +348,7 @@ export class WorkerWavelengthClient extends BaseWavelengthClient {
     }
 
     try {
-      return await super.start(config);
+      return await startDaemon();
     } catch (err) {
       // Any failed start abandons the worker. Killing it frees any OPFS handles
       // the start opened before failing, and the next start gets a fresh
@@ -355,7 +410,8 @@ export class WorkerWavelengthClient extends BaseWavelengthClient {
         new WavelengthError(
           this.disposed
             ? 'Wavelength client disposed'
-            : 'Wavelength runtime has exited; call start() to boot a new one',
+            : 'Wavelength runtime has exited; call a typed start method to ' +
+              'boot a new one',
           'worker_error',
         ),
       );

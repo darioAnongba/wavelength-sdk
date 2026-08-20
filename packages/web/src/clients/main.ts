@@ -1,10 +1,13 @@
 import {
   BaseWavelengthClient,
   WavelengthError,
+  validateExternalSeedWalletRequest,
   validateRuntimeConfig,
 } from '@lightninglabs/wavelength-core';
 import type {
   ActivityStreamOptions,
+  ExternalSeedWalletOpenResult,
+  ExternalSeedWalletRequest,
   FacadeMethod,
   RuntimeConfig,
   WalletInfo,
@@ -23,12 +26,18 @@ import { resolveIntegrityDigests } from '../integrity.ts';
 import type { RuntimeDigests } from '../integrity.ts';
 import {
   RuntimeLock,
+  RUNTIME_LOCK_NAME,
   NO_RUNTIME_LEASE,
   isNearMissLockMessage,
   isWalletLockedMessage,
 } from '../runtime-lock.ts';
 import type { RuntimeLockLease } from '../runtime-lock.ts';
-import { ActivityHandle, debugTs, errorMessage } from '../util.ts';
+import {
+  ActivityHandle,
+  debugTs,
+  errorMessage,
+  facadeDebugPayload,
+} from '../util.ts';
 import { performanceNow, reportPerformance } from '../performance.ts';
 
 type ActivityOpen = {
@@ -105,6 +114,15 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
     return this.enqueueLifecycle(() => this.startLocked(config));
   }
 
+  startExternalSeedWallet(
+    config: RuntimeConfig,
+    req: ExternalSeedWalletRequest,
+  ): Promise<ExternalSeedWalletOpenResult> {
+    return this.enqueueLifecycle(() =>
+      this.startExternalSeedWalletLocked(config, req),
+    );
+  }
+
   stop(): Promise<void> {
     return this.enqueueLifecycle(() =>
       // A stop after the runtime has exited has nothing to stop: bootExit
@@ -117,12 +135,43 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
     );
   }
 
-  // startLocked is the serialized body of start(). It is the verb that opens the
-  // daemon's exclusive OPFS databases, so it is where the cross-tab runtime lock
-  // is taken: a second tab fails fast with wallet_locked instead of tripping
-  // over SQLite handles held by the first. Validation runs first so a config
-  // that can never reach the daemon does not take the lock at all.
-  private async startLocked(config: RuntimeConfig): Promise<WalletInfo> {
+  // Both startup wrappers enter the serialized origin-global lock body below
+  // before opening OPFS. Main-thread clients share one page-global Go bridge,
+  // so they cannot safely run separate profiles at the same time.
+  private startLocked(config: RuntimeConfig): Promise<WalletInfo> {
+    return this.startWithRuntimeLock(
+      config,
+      RUNTIME_LOCK_NAME,
+      () => super.start(config),
+      () => this.getInfo(),
+    );
+  }
+
+  private startExternalSeedWalletLocked(
+    config: RuntimeConfig,
+    req: ExternalSeedWalletRequest,
+  ): Promise<ExternalSeedWalletOpenResult> {
+    validateExternalSeedWalletRequest(req);
+    if (typeof config.dataDir !== 'string' || config.dataDir.trim() === '') {
+      return super.startExternalSeedWallet(config, req);
+    }
+
+    return this.startWithRuntimeLock(
+      config,
+      RUNTIME_LOCK_NAME,
+      () => super.startExternalSeedWallet(config, req),
+    );
+  }
+
+  // Every verb that opens daemon databases shares this serialized acquisition
+  // path. Ordinary start may coalesce through whenRunning. External-seed
+  // startup never does because its final profile and entropy select a wallet.
+  private async startWithRuntimeLock<T>(
+    config: RuntimeConfig,
+    lockName: string,
+    startDaemon: () => Promise<T>,
+    whenRunning?: () => Promise<T>,
+  ): Promise<T> {
     validateRuntimeConfig(config, this.serverTransport);
     if (this.disposed) {
       throw new WavelengthError('Wavelength client disposed', 'wavelength_error');
@@ -140,18 +189,26 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
     // A redundant start on an already-running session (the double click
     // enqueueLifecycle serializes, or any host that starts twice) coalesces
     // rather than re-invoking the daemon. By here the lock is held and the
-    // runtime is up, so re-running super.start() would risk a daemon "already
-    // started" or a transient getInfo() rejection, whose recovery stop would
+    // runtime is up, so re-running the lifecycle verb would risk a daemon
+    // "already started" or a transient rejection whose recovery stop would
     // tear the live session down and free the cross-tab lock for other tabs.
     // Return the current info instead, leaving the session and its lock
     // intact. To start under a different config, stop() first.
     if (this.lock.held) {
-      return this.getInfo();
+      if (whenRunning) {
+        return whenRunning();
+      }
+
+      throw new WavelengthError(
+        'a wallet runtime is already active; call stop() before starting an ' +
+          'external-seed wallet',
+        'runtime_active',
+      );
     }
-    this.lease = await this.lock.acquire();
+    this.lease = await this.lock.acquire(lockName);
     // acquire() yields even when it resolves immediately (no Web Locks), so a
     // dispose() issued in the same turn can land here. Bail before booting a
-    // daemon into a disposed client. super.start() has not run, so no daemon
+    // daemon into a disposed client. startDaemon has not run, so no daemon
     // opened a database whatever the runtime's load state, and the lock this
     // attempt took is released unconditionally rather than stranded for the
     // life of the page.
@@ -178,9 +235,9 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
     }
 
     try {
-      return await super.start(config);
+      return await startDaemon();
     } catch (err) {
-      // super.start() ran, so a callable runtime may have opened the databases.
+      // startDaemon ran, so a callable runtime may have opened the databases.
       // Whether to hand the lock back is decided by probing the runtime, not by
       // classifying the error: classifying by code cannot catch every shape (a
       // missing Go constructor, a fetch or instantiate failure with no code at
@@ -199,7 +256,7 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
       if (typeof wavewalletdkCall() !== 'function') {
         await this.lock.releaseAndSettle(this.lease);
       } else if (!this.runtimeExited) {
-        // super.stop(), not this.stop(): startLocked already runs inside the
+        // super.stop(), not this.stop(): startWithRuntimeLock already runs in the
         // lifecycle queue, so the enqueuing stop() override would wait on this
         // very operation and deadlock. This recovery stop is part of the start.
         await super.stop().catch((stopErr) => {
@@ -258,11 +315,17 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
 
     try {
       if (this.debug) {
-        console.log(`${debugTs()} Executing ${method}:`, params);
+        console.log(
+          `${debugTs()} Executing ${method}:`,
+          facadeDebugPayload(method, params),
+        );
       }
       const result = await globalWallet.wavewalletdkCall(method, params);
       if (this.debug) {
-        console.log(`${debugTs()} Executed ${method} result:`, result);
+        console.log(
+          `${debugTs()} Executed ${method} result:`,
+          facadeDebugPayload(method, result),
+        );
       }
 
       return result;
@@ -271,10 +334,11 @@ export class MainThreadWavelengthClient extends BaseWavelengthClient {
       this.logNearMissLock(message);
       throw new WavelengthError(
         message,
-        // Gated to the start verb: cross-context OPFS contention only happens
-        // when a runtime opens the databases, so a matching message on any
-        // other verb is same-runtime transient contention, not another tab.
-        method === 'start' && isWalletLockedMessage(message)
+        // Gated to startup lifecycle verbs: cross-context OPFS contention only
+        // happens when a runtime opens databases. A match on another verb is
+        // same-runtime transient contention, not another tab.
+        (method === 'start' || method === 'startExternalSeedWallet') &&
+        isWalletLockedMessage(message)
           ? 'wallet_locked'
           : 'wavelength_error',
         { cause: err },

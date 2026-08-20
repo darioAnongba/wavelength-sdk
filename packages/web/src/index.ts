@@ -1,7 +1,7 @@
 import {
-  WavelengthClient,
   createWalletEngine,
   type DistributiveOmit,
+  type ExternalSeedWalletClient,
   type PasskeyCeremony,
   type WavelengthPerformanceListener,
   type WalletEngine,
@@ -96,13 +96,13 @@ export type WebClientOptions = {
 };
 
 /**
- * Creates a {@link WavelengthClient} backed by the browser/wasm transport. Defaults
- * to the Web Worker transport; pass runtimeThread: 'main' to run the runtime on
- * the page's main thread instead.
+ * Creates an {@link ExternalSeedWalletClient} backed by the browser/wasm
+ * transport. Defaults to the Web Worker transport; pass runtimeThread: 'main'
+ * to run the runtime on the page's main thread instead.
  */
 export function createWebClient(
   options: WebClientOptions = {},
-): WavelengthClient {
+): ExternalSeedWalletClient {
   return options.runtimeThread === 'main'
     ? new MainThreadWavelengthClient(options)
     : new WorkerWavelengthClient(options);

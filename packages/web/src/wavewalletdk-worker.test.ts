@@ -227,6 +227,54 @@ describe('wavewalletdk worker activity lifecycle', () => {
   });
 });
 
+describe('wavewalletdk worker external-seed redaction', () => {
+  it('never writes external-seed request or result secrets to debug logs', async () => {
+    const source = await readFile(
+      new URL('./wavewalletdk-worker.js', import.meta.url),
+      'utf8',
+    );
+    const listeners = new Map<string, Array<() => void>>();
+    const logs: unknown[][] = [];
+    const self: Record<string, unknown> = {
+      postMessage: () => undefined,
+      addEventListener: (name: string, listener: () => void) => {
+        const current = listeners.get(name) ?? [];
+        current.push(listener);
+        listeners.set(name, current);
+      },
+      wavewalletdkCall: async () => ({
+        Imported: true,
+        IdentityPubKey: 'identity',
+      }),
+    };
+    vm.runInNewContext(source, {
+      self,
+      console: { ...console, log: (...args: unknown[]) => logs.push(args) },
+      URL,
+      Event: class Event {},
+      setTimeout,
+      clearTimeout,
+    });
+
+    const onmessage = self.onmessage as (event: unknown) => Promise<void>;
+    await onmessage({ data: { $init: { debug: true } } });
+    for (const listener of listeners.get('wavewalletdk-ready') ?? []) listener();
+    await onmessage({
+      data: {
+        id: 1,
+        method: 'startExternalSeedWallet',
+        params: {
+          seed_entropy: 'AAECAwQFBgcICQoLDA0ODw==',
+        },
+      },
+    });
+
+    const renderedLogs = JSON.stringify(logs);
+    assert.equal(renderedLogs.includes('AAECAwQFBgcICQoLDA0ODw=='), false);
+    assert.match(renderedLogs, /REDACTED external-seed wallet payload/);
+  });
+});
+
 describe('wavewalletdk worker runtime cache option', () => {
   async function loadWorker() {
     const source = await readFile(

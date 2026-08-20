@@ -57,6 +57,15 @@ export function normalizeFacadeResult<T = unknown>(
   case 'createWallet':
   case 'openWalletFromPasskey':
     return { ...result, mnemonic: nilSlice(result.mnemonic) } as T;
+  case 'startExternalSeedWallet': {
+    // A paired daemon never returns backup words for this lifecycle. Strip the
+    // field defensively so an older or mismatched runtime cannot surface an
+    // internal wallet mnemonic through the public result.
+    const sanitized = { ...result };
+    delete sanitized.mnemonic;
+
+    return sanitized as T;
+  }
   case 'prepareSend':
     return {
       ...result,

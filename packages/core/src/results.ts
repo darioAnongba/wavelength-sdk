@@ -9,6 +9,26 @@ import type {
  */
 export type OpenWalletFromPasskeyResult = OpenWalletResult;
 
+/** Result of atomically starting and opening an external-seed daemon wallet. */
+export type ExternalSeedWalletOpenResult = {
+  /** True when the seed was imported into a new local profile. */
+  imported: boolean;
+  /** The daemon identity for this wallet. */
+  identityPubKey: string;
+  /** True when this open operation ran a state-recovery scan. */
+  recoveryRan: boolean;
+  /** Number of boarding addresses found by recovery. */
+  recoveredBoardingAddresses: number;
+  /** Number of boarding UTXOs found by recovery. */
+  recoveredBoardingUTXOs: number;
+  /** Number of Ark VTXOs found by recovery. */
+  recoveredVTXOs: number;
+  /** Number of out-of-round receive scripts found by recovery. */
+  recoveredOORReceiveScripts: number;
+  /** Number of out-of-round recipient events found by recovery. */
+  recoveredOORRecipientEvents: number;
+};
+
 /**
  * Augments the wire send shape with `paymentHash`, the canonical place to read
  * a Lightning payment hash for a send. The daemon returns it from prepareSend

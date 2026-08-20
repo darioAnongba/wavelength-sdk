@@ -1,6 +1,7 @@
 import type {
   CreateWalletRequest,
   DepositRequest,
+  ExternalSeedWalletRequest,
   ExitRequest,
   ExitStatusRequest,
   ExitSummaryRequest,
@@ -12,10 +13,12 @@ import type {
   SweepWalletRequest,
   UnlockWalletRequest,
 } from './requests.ts';
+import { validateExternalSeedWalletRequest } from './requests.ts';
 import type {
   Balance,
   CreateWalletResult,
   DepositResult,
+  ExternalSeedWalletOpenResult,
   ExitResult,
   ExitStatusResult,
   ExitSummaryResult,
@@ -29,12 +32,13 @@ import type {
   UnlockWalletResult,
 } from './results.ts';
 import { validateRuntimeConfig, type RuntimeConfig } from './config.ts';
-import type { WavelengthClient } from './client.ts';
+import type { ExternalSeedWalletClient } from './client.ts';
 import type { WavelengthEvent, WavelengthListener } from './events.ts';
 import type { WalletInfo, WalletStatus } from './state.ts';
 import type { FacadeMethod, ServerTransport } from './facade.ts';
 import {
   assertFacadeMethod,
+  toExternalSeedWalletStartParams,
   toGoCreateWalletReq,
   toGoUnlockWalletReq,
   toMobileConfig,
@@ -51,15 +55,16 @@ import {
 } from './activity-options.ts';
 
 /**
- * Implements the transport-agnostic half of {@link WavelengthClient}: every RPC
- * verb is expressed in terms of the abstract invokeFacade, so a transport (web
- * wasm, React Native gomobile, or a future one) supplies only the pipe:
- * invokeFacade, ready, the activity-stream plumbing, and its {@link ServerTransport}
- * flavor. The shared subscribe/emit listener machinery and typed wrappers live
- * here. The facade catalog, public contract, native dispatch, and response
- * normalization remain separate synchronization points.
+ * Implements the transport-agnostic half of
+ * {@link ExternalSeedWalletClient}: every RPC verb is expressed in terms of
+ * the abstract invokeFacade, so a transport (web wasm, React Native gomobile,
+ * or a future one) supplies only the pipe: invokeFacade, ready, the
+ * activity-stream plumbing, and its {@link ServerTransport} flavor. The shared
+ * subscribe/emit listener machinery and typed wrappers live here. The facade
+ * catalog, public contract, native dispatch, and response normalization remain
+ * separate synchronization points.
  */
-export abstract class BaseWavelengthClient implements WavelengthClient {
+export abstract class BaseWavelengthClient implements ExternalSeedWalletClient {
   protected readonly listeners = new Set<WavelengthListener>();
 
   // Serializes runtime lifecycle operations for transports that route start and
@@ -81,20 +86,26 @@ export abstract class BaseWavelengthClient implements WavelengthClient {
   /** How this transport's daemon dials the Ark and swap servers. */
   protected abstract readonly serverTransport: ServerTransport;
 
-  // The raw facade escape hatch. It rejects the lifecycle verbs 'start' and
-  // 'stop' so they can only run through the typed start()/stop(): those are
-  // where the web transports take and release the cross-tab runtime lock, and a
-  // raw call would bypass it. The typed methods dispatch through
-  // callFacadeInternal, which carries no such guard.
+  // The raw facade escape hatch rejects start, startExternalSeedWallet, and
+  // stop so they can only run through typed lifecycle methods. Those are where
+  // web transports take and release the cross-tab runtime lock; a raw call
+  // would bypass it. Typed methods dispatch through callFacadeInternal instead.
   async callFacade<T = unknown>(
     method: FacadeMethod,
     params: unknown = {},
   ): Promise<T> {
-    if (method === 'start' || method === 'stop') {
+    if (
+      method === 'start' ||
+      method === 'startExternalSeedWallet' ||
+      method === 'stop'
+    ) {
+      const typedCall = method === 'startExternalSeedWallet'
+        ? 'ExternalSeedWalletClient.startExternalSeedWallet()'
+        : `${method}()`;
       throw new WavelengthError(
-        `Call ${method}() instead of callFacade('${method}'): the ${method} ` +
-          'lifecycle verb runs through the typed method, which manages the ' +
-          'cross-tab runtime lock.',
+        `Call ${typedCall} instead of callFacade('${method}'): the ` +
+          `${method} lifecycle verb runs through the typed method, which ` +
+          'manages the cross-tab runtime lock.',
       );
     }
 
@@ -155,6 +166,25 @@ export abstract class BaseWavelengthClient implements WavelengthClient {
     );
 
     return this.getInfo();
+  }
+
+  async startExternalSeedWallet(
+    config: RuntimeConfig,
+    req: ExternalSeedWalletRequest,
+  ): Promise<ExternalSeedWalletOpenResult> {
+    validateRuntimeConfig(config, this.serverTransport);
+    validateExternalSeedWalletRequest(req);
+    if (typeof config.dataDir !== 'string' || config.dataDir.trim() === '') {
+      throw new WavelengthError(
+        'startExternalSeedWallet requires a final nonempty config.dataDir',
+        'invalid_config',
+      );
+    }
+
+    return this.callFacadeInternal<ExternalSeedWalletOpenResult>(
+      'startExternalSeedWallet',
+      toExternalSeedWalletStartParams(config, req, this.serverTransport),
+    );
   }
 
   async stop(): Promise<void> {

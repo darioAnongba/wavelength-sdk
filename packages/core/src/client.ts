@@ -6,6 +6,7 @@ import type { ActivityStreamOptions } from './activity-options.ts';
 import type {
   CreateWalletRequest,
   DepositRequest,
+  ExternalSeedWalletRequest,
   ExitRequest,
   ExitStatusRequest,
   ExitSummaryRequest,
@@ -21,6 +22,7 @@ import type {
   Balance,
   CreateWalletResult,
   DepositResult,
+  ExternalSeedWalletOpenResult,
   ExitResult,
   ExitStatusResult,
   ExitSummaryResult,
@@ -35,9 +37,12 @@ import type {
 } from './results.ts';
 
 /**
- * The framework-agnostic contract every Wavelength transport implements. It wraps
- * the embedded daemon's lifecycle, wallet operations, and activity stream behind
- * typed, camelCase-normalized methods.
+ * The framework-agnostic contract every Wavelength transport implements. It
+ * wraps the embedded daemon's lifecycle, wallet operations, and activity
+ * stream behind typed, camelCase-normalized methods.
+ *
+ * External-seed startup is an additive transport capability;
+ * see {@link ExternalSeedWalletClient}.
  */
 export interface WavelengthClient {
   /** Resolves once the runtime assets are loaded and the client is usable. */
@@ -106,11 +111,11 @@ export interface WavelengthClient {
    * low-level escape hatch for facade verbs the typed methods do not cover;
    * prefer the typed methods wherever they exist.
    *
-   * Rejects the lifecycle verbs `'start'` and `'stop'`: use the typed
-   * {@link start} and {@link stop} instead. On the web transports those verbs
-   * take and release the cross-tab runtime lock, so allowing a raw
-   * `callFacade('start')` or `callFacade('stop')` would bypass it, defeat the
-   * multi-tab guard, and could strand the lock until the page reloads.
+   * Rejects the lifecycle verbs `'start'`, `'startExternalSeedWallet'`, and
+   * `'stop'`. Use the typed methods here or on
+   * {@link ExternalSeedWalletClient} instead. On web those methods take and
+   * release the cross-tab runtime lock. Raw lifecycle dispatch would bypass
+   * that guard.
    */
   callFacade<T = unknown>(method: FacadeMethod, params?: unknown): Promise<T>;
   /** Reports whether the embedded daemon is running. */
@@ -132,4 +137,22 @@ export interface WavelengthClient {
    * start again.
    */
   dispose(): void;
+}
+
+/**
+ * Additive client capability for callers that derive external wallet entropy
+ * and select the final storage profile themselves. Official web and React
+ * Native clients implement it. Custom clients can keep implementing
+ * {@link WavelengthClient} unless they need external-seed startup.
+ */
+export interface ExternalSeedWalletClient extends WavelengthClient {
+  /**
+   * Atomically starts the daemon at the final configured profile and imports
+   * or unlocks a wallet from exactly 16 bytes of external seed entropy. This is
+   * a lifecycle operation: call {@link stop} before selecting another wallet.
+   */
+  startExternalSeedWallet(
+    config: RuntimeConfig,
+    req: ExternalSeedWalletRequest,
+  ): Promise<ExternalSeedWalletOpenResult>;
 }

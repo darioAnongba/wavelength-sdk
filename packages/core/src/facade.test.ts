@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  base64FromBytes,
   base64FromUtf8,
+  toExternalSeedWalletStartParams,
   toGoCreateWalletReq,
   toGoUnlockWalletReq,
   toMobileConfig,
@@ -17,6 +19,16 @@ describe('base64FromUtf8', () => {
         `mismatch for ${JSON.stringify(value)}`,
       );
     }
+  });
+});
+
+describe('base64FromBytes', () => {
+  it('matches node base64 output without converting through text', () => {
+    const bytes = Uint8Array.from([0, 255, 128, 64, 1]);
+    assert.equal(
+      base64FromBytes(bytes),
+      Buffer.from(bytes).toString('base64'),
+    );
   });
 });
 
@@ -121,6 +133,37 @@ describe('toMobileConfig', () => {
     );
     assert.equal(out.server_transport, 'rest');
     assert.equal(out.swap_server_transport, 'rest');
+  });
+});
+
+describe('toExternalSeedWalletStartParams', () => {
+  it('sends only final config, entropy, identity, and recovery fields', () => {
+    const seedEntropy = Uint8Array.from({ length: 16 }, (_, index) => index);
+    assert.deepEqual(
+      toExternalSeedWalletStartParams(
+        { network: 'signet', dataDir: '/wallets' },
+        {
+          seedEntropy,
+          expectedIdentityPubKey: 'identity',
+          recoverState: true,
+          recoveryWindow: 42,
+        },
+        'rest',
+      ),
+      {
+        config: {
+          data_dir: '/wallets',
+          network: 'signet',
+          server_transport: 'rest',
+          swap_server_transport: 'rest',
+          wallet_type: 'lwwallet',
+        },
+        seed_entropy: Buffer.from(seedEntropy).toString('base64'),
+        expected_identity_pubkey: 'identity',
+        recover_state: true,
+        recovery_window: 42,
+      },
+    );
   });
 });
 

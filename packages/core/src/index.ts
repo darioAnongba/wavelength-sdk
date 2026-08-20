@@ -48,6 +48,7 @@ export type {
 export type {
   CreateWalletRequest,
   DepositRequest,
+  ExternalSeedWalletRequest,
   ExitRequest,
   ExitStatusRequest,
   ExitSummaryRequest,
@@ -60,7 +61,10 @@ export type {
   SweepWalletRequest,
   UnlockWalletRequest,
 } from './requests.ts';
-export { FORCE_UNROLL_ACK } from './requests.ts';
+export {
+  FORCE_UNROLL_ACK,
+  validateExternalSeedWalletRequest,
+} from './requests.ts';
 export type { ActivityStreamOptions } from './activity-options.ts';
 
 // Result shapes (a couple SDK-augmented, the rest re-exported from generated).
@@ -78,6 +82,7 @@ export type {
   EntryRequest,
   EntryRequestType,
   EntryStatus,
+  ExternalSeedWalletOpenResult,
   ExitCSV,
   ExitFees,
   ExitInfeasibilityReason,
@@ -171,8 +176,12 @@ export type {
   ExitBatchStop,
 } from './exit.ts';
 
-// The client contract every transport implements.
-export type { WavelengthClient } from './client.ts';
+// The stable client contract every transport implements, plus the additive
+// capability used by caller-owned external-seed startup.
+export type {
+  ExternalSeedWalletClient,
+  WavelengthClient,
+} from './client.ts';
 
 // The transport-agnostic half of the client, for transport implementers:
 // extend it and supply invokeFacade, ready, the activity plumbing, and the
@@ -198,7 +207,10 @@ export type {
 } from './passkey.ts';
 
 // The daemon facade method catalog shared by every transport.
-export { FACADE_METHODS, base64FromUtf8 } from './facade.ts';
+export {
+  FACADE_METHODS,
+  base64FromUtf8,
+} from './facade.ts';
 export type { FacadeMethod } from './facade.ts';
 
 // The daemon build this SDK release is paired with (generated types and

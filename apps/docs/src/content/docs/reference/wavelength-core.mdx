@@ -286,10 +286,11 @@ package.
 
 <Signature title="wavelength-core.d.ts" code={mobileConfigSig} />
 
-The daemon's start verb accepts this lower-level shape; the SDK builds it from
-your [`RuntimeConfig`](#RuntimeConfig) when you call `client.start(config)`. The
-lifecycle verbs are not reachable through `callFacade`, which rejects `'start'`
-and `'stop'` so the cross-tab runtime lock is never bypassed.
+The daemon's ordinary start verb accepts this lower-level shape; the SDK builds
+it from your [`RuntimeConfig`](#RuntimeConfig) when you call
+`client.start(config)`. Lifecycle verbs are not reachable through `callFacade`,
+which rejects `'start'`, `'startExternalSeedWallet'`, and `'stop'` so transport
+lifecycle guards are never bypassed.
 
 </ApiSymbol>
 
@@ -326,44 +327,156 @@ export const wavelengthClientSig = `interface WavelengthClient {
   dispose(): void;
 }`;
 
+export const externalSeedWalletClientSig = `interface ExternalSeedWalletClient
+  extends WavelengthClient {
+  startExternalSeedWallet(
+    config: RuntimeConfig,
+    req: ExternalSeedWalletRequest,
+  ): Promise<ExternalSeedWalletOpenResult>;
+}`;
+
 export const readySig = `ready(): Promise<void>`;
 export const startSig = `start(config: RuntimeConfig): Promise<WalletInfo>`;
+export const startExternalSeedWalletSig = `startExternalSeedWallet(
+  config: RuntimeConfig,
+  req: ExternalSeedWalletRequest,
+): Promise<ExternalSeedWalletOpenResult>`;
+export const externalSeedWalletRequestSig = `type ExternalSeedWalletRequest = {
+  seedEntropy: Uint8Array;
+  expectedIdentityPubKey?: string;
+  recoverState?: boolean;
+  recoveryWindow?: number;
+};`;
+export const externalSeedWalletOpenResultSig = `type ExternalSeedWalletOpenResult = {
+  imported: boolean;
+  identityPubKey: string;
+  recoveryRan: boolean;
+  recoveredBoardingAddresses: number;
+  recoveredBoardingUTXOs: number;
+  recoveredVTXOs: number;
+  recoveredOORReceiveScripts: number;
+  recoveredOORRecipientEvents: number;
+};`;
 export const stopSig = `stop(): Promise<void>`;
 export const disposeSig = `dispose(): void`;
 
 <ApiSymbol name="WavelengthClient" kind="type">
 
-The typed RPC surface every transport implements. Create a client with
+The stable typed RPC surface every transport implements. Create a client with
 [`createWebClient()`](/reference/wavelength-web/) from wavelength-web or
 `createNativeClient()` from [wavelength-react-native](/reference/wavelength-react-native/),
 call `start(config)`, then use the wallet methods documented in the
-sections below.
+sections below. Official web and React Native clients also implement the
+additive [`ExternalSeedWalletClient`](#ExternalSeedWalletClient) capability.
 
 <Signature title="wavelength-core.d.ts" code={wavelengthClientSig} />
 
-**Call order.** A client's methods are only meaningful in this order: await
-`ready()` once, then `start(config)` once, then any of the wallet operations
-(any number of times, in any order appropriate to your app), then `stop()`
-when you are done running the daemon, then `dispose()` to release the
-client's own resources. `isRunning()` is the exception: it can be called
-before startup or after shutdown to inspect the daemon process state.
-`dispose()` is terminal: build a new client to start again.
+**Call order.** Await `ready()` once, call one typed start method, use the
+wallet operations, then call `stop()` when you are done running the daemon.
+Call `dispose()` to release the client's own resources. `isRunning()` is the
+exception: it can be called before startup or after shutdown to inspect the
+daemon process state. `dispose()` is terminal: build a new client to start
+again.
+
+</ApiSymbol>
+
+<ApiSymbol name="ExternalSeedWalletClient" kind="type">
+
+An additive transport capability for a host that derives wallet entropy and
+selects the final storage profile itself. It extends
+[`WavelengthClient`](#WavelengthClient) without adding seed, account, or folder
+semantics to the standard client contract. Official web and React Native
+factories return this subtype.
+
+<Signature title="wavelength-core.d.ts" code={externalSeedWalletClientSig} />
 
 </ApiSymbol>
 
 <ApiSymbol name="ready" kind="function">
 
 Resolves once the runtime assets (the wasm daemon and its supporting files)
-are loaded and the client is otherwise usable. Always await this before
-`start()`.
+are loaded and the client is otherwise usable. Always await this before a typed
+start method.
 
 <Signature title="wavelength-core.d.ts" code={readySig} />
 
 <Returns type="Promise<void>">
-Resolves when the client is ready to `start()`. Rejects with a `WavelengthError`
-if the runtime assets fail to load (code `asset_load_failed`) or fail digest
-verification (code `asset_integrity_failed`).
+Resolves when the client is ready to start a runtime. Rejects with a
+`WavelengthError` if the runtime assets fail to load (code
+`asset_load_failed`) or fail digest verification (code
+`asset_integrity_failed`).
 </Returns>
+
+</ApiSymbol>
+
+<ApiSymbol name="startExternalSeedWallet" kind="function">
+
+Starts an embedded daemon at a caller-selected profile and imports a fresh
+wallet, or unlocks the wallet already stored there, from exactly 16 bytes of
+entropy. The host supplies the final nonempty `config.dataDir`; Wavelength SDK
+does not derive seed entropy, assign account indexes, map networks into a seed
+path, or construct profile directories.
+
+<Signature title="wavelength-core.d.ts" code={startExternalSeedWalletSig} />
+
+<ParamsTable rows={[
+  { name: 'config', type: 'RuntimeConfig', desc: 'Final daemon configuration. dataDir must already identify the complete storage profile selected by the host.' },
+  { name: 'req', type: 'ExternalSeedWalletRequest', desc: 'Exactly 16 bytes of derived entropy plus optional identity and recovery checks.' },
+]} />
+
+<Returns type="Promise<ExternalSeedWalletOpenResult>">
+Resolves after the wallet is imported or unlocked and its wallet-dependent
+services are ready. Call [`stop()`](#stop) before selecting another profile on
+the same client.
+</Returns>
+
+```ts
+const result = await client.startExternalSeedWallet(
+  {
+    ...runtimeConfig,
+    dataDir: finalProfileDataDir,
+  },
+  {
+    seedEntropy: derivedEntropy16,
+    expectedIdentityPubKey: previouslyStoredIdentity,
+  },
+);
+
+persistIdentity(result.identityPubKey);
+```
+
+Keep the root seed and derivation logic in the integrating application. The
+final 16-byte entropy is the only seed material that enters this request. The
+transport redacts the whole startup request and result from opt-in debug logs.
+
+<ApiTypeLabel name="ExternalSeedWalletRequest" />
+
+<Signature title="wavelength-core.d.ts" code={externalSeedWalletRequestSig} />
+
+<ParamsTable rows={[
+  { name: 'seedEntropy', type: 'Uint8Array', desc: 'Exactly 16 bytes for the daemon internal wallet seed. The client rejects any other type or length before dispatch.' },
+  { name: 'expectedIdentityPubKey', type: 'string', desc: 'Optional identity observed on an earlier open. Startup fails if the selected profile does not match it.' },
+  { name: 'recoverState', type: 'boolean', desc: 'Optional per-start request to scan for wallet state. Leave false after a successful recovery to avoid repeating the scan.' },
+  { name: 'recoveryWindow', type: 'number', desc: 'Optional per-key-family recovery look-ahead. It must fit in uint32 and is meaningful only with recoverState.' },
+]} />
+
+<ApiTypeLabel name="ExternalSeedWalletOpenResult" />
+
+<Signature title="wavelength-core.d.ts" code={externalSeedWalletOpenResultSig} />
+
+`imported` distinguishes first import from an existing-profile unlock.
+`identityPubKey` is the non-secret identity to persist for a later
+`expectedIdentityPubKey` check. The remaining fields report whether recovery
+ran and what it found. The result contains no seed material.
+
+<Callout type="caution" title="Requires the paired unreleased daemon">
+This source API depends on
+[lightninglabs/wavelength#1158](https://github.com/lightninglabs/wavelength/pull/1158).
+It is absent from the currently pinned v0.1.1 WASM and gomobile artifacts.
+Until a newer Wavelength release is published and this SDK advances its
+runtime pin, use runtime assets or native bindings built from the paired
+Wavelength branch.
+</Callout>
 
 </ApiSymbol>
 
@@ -390,10 +503,11 @@ already exists on disk (none, locked, or ready).
 <ApiSymbol name="stop" kind="function">
 
 Stops the embedded daemon. The client instance itself remains usable
-afterward: call `start()` again to restart the daemon without constructing a
-new client. Use `dispose()` instead when you are done with the client
-entirely, since it also releases the client's own resources (subscriptions,
-the activity stream, and, for the worker transport, the underlying Worker).
+afterward: call `start()` or `startExternalSeedWallet()` to start it again
+without constructing a new client. Use `dispose()` instead when you are done
+with the client entirely, since it also releases the client's own resources
+(subscriptions, the activity stream, and, for the worker transport, the
+underlying Worker).
 
 <Signature title="wavelength-core.d.ts" code={stopSig} />
 
@@ -2454,7 +2568,8 @@ exit and sweep flow end to end.
 ## Portable facade calls
 
 export const facadeMethodSig = `type FacadeMethod =
-  | 'start' | 'stop' | 'getInfo' | 'status' | 'balance'
+  | 'start' | 'startExternalSeedWallet' | 'stop'
+  | 'getInfo' | 'status' | 'balance'
   | 'createWallet' | 'unlockWallet' | 'openWalletFromPasskey'
   | 'deposit' | 'receive' | 'prepareSend' | 'sendPrepared'
   | 'list' | 'exit' | 'exitStatus' | 'exitSummary'
@@ -2490,10 +2605,10 @@ as `T` (unchecked; the caller asserts the shape).
 <Signature title="wavelength-core.d.ts" code={facadeMethodSig} />
 
 The whitelist excludes the streaming `subscribe` operation and private worker
-control methods such as `$ready` and `$init`. The lifecycle verbs `start` and
-`stop` are rejected too: call the typed [`start()`](#start) / [`stop()`](#stop)
-methods, which own the runtime lifecycle (and, on the web transports, the
-cross-tab runtime lock). Requests use the raw mobile/wasm shapes, while
+control methods such as `$ready` and `$init`. The lifecycle verbs `start`,
+`startExternalSeedWallet`, and `stop` are rejected too: call their typed
+methods, which own the runtime lifecycle and web storage locks. Requests use
+the raw mobile/wasm shapes, while
 responses use the same camelCase keys and schema-aware nil normalization as
 typed methods. The four scalar verbs
 `confirmedBalanceSat`, `pendingInboundSat`, `walletReady`, and `isRunning` are
@@ -2855,6 +2970,8 @@ export const errorCodeSig = `type WavelengthErrorCode =
   | 'unsupported_facade_method'
   | 'invalid_cursor'
   | 'invalid_config'
+  | 'invalid_external_seed'
+  | 'runtime_active'
   | (string & {});`;
 
 <ApiSymbol name="WavelengthError" kind="class">
@@ -2876,25 +2993,27 @@ Base error class thrown by all Wavelength SDK packages. Carries a machine-readab
 
 Stable, machine-readable error classification on `WavelengthError`. Named SDK
 codes are listed below; most daemon-originated errors fall back to
-`wavelength_error`, except recognized storage-contention messages on `start()`,
-which the web transports map to `wallet_locked`. The `(string & {})` arm keeps the union
-open for forward compatibility while still offering autocomplete on the known
-codes.
+`wavelength_error`, except recognized storage-contention messages on typed
+start methods, which the web transports map to `wallet_locked`. The
+`(string & {})` arm keeps the union open for forward compatibility while still
+offering autocomplete on the known codes.
 
 <Signature title="wavelength-core.d.ts" code={errorCodeSig} />
 
 | Code | Thrown when |
 |---|---|
-| `wavelength_error` | The generic default: any SDK error without a more specific code, and daemon-originated failures today, except recognized storage-contention messages on `start()` that map to `wallet_locked`. |
+| `wavelength_error` | The generic default: any SDK error without a more specific code, and daemon-originated failures today, except recognized storage-contention messages on typed start methods that map to `wallet_locked`. |
 | `runtime_not_ready` | The wasm runtime is not callable: it exited before signaling ready, or its call entry point is missing once loading has finished. |
 | `asset_load_failed` | `ready()` fails to load the runtime assets (wasm binary or its supporting files). |
 | `asset_integrity_failed` | A runtime asset was downloaded in full and recognized as a runtime asset, but its bytes did not match the pinned digest. `asset_load_failed` covers most other ways a runtime asset failed to reach a usable state, including a body that does not look like a runtime asset at all, or, on the main thread, an already-verified script blocked from executing. In the default worker transport that block reaches the client as an unrecognized browser message and surfaces as `wavelength_error`, as does a downloaded, verified module that fails to compile, which is not an asset problem. |
 | `worker_error` | The worker transport's underlying Worker fails or crashes. |
-| `wallet_locked` | The wallet is already running in another tab or window of the same origin. The daemon's browser storage is exclusive to one runtime, so `start()` fails immediately rather than corrupting or losing data. Unrelated to the `locked` phase, which means a wallet on this device is waiting to be unlocked. |
+| `wallet_locked` | The relevant web runtime lock is held elsewhere. Legacy `start()` uses one origin-global lock; worker-based external-seed starts use a lock scoped to the final dataDir/network profile. Unrelated to the `locked` phase, which means a wallet is waiting to be unlocked. |
 | `runtime_lock_unavailable` | The browser refused or dropped the runtime lock request itself (for example while the document is shutting down). Unlike `wallet_locked`, this says nothing about another tab holding the wallet. |
 | `unsupported_facade_method` | A call names a method the daemon facade does not expose. |
 | `invalid_cursor` | `startActivity()` is given a cursor that is not a nonnegative safe integer. |
 | `invalid_config` | `RuntimeConfig` validation fails before the daemon starts. |
+| `invalid_external_seed` | `startExternalSeedWallet()` receives entropy that is not exactly 16 bytes, or an invalid identity or recovery field. |
+| `runtime_active` | An external-seed start is attempted while the same client already has a runtime active. Stop it before selecting another profile. |
 
 </ApiSymbol>
 

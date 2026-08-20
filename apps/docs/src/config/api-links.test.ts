@@ -9,6 +9,25 @@ test('resolves a core symbol to its reference anchor', () => {
   });
 });
 
+test('resolves external-seed lifecycle symbols to their core anchors', () => {
+  assert.deepEqual(resolveApiLink('ExternalSeedWalletClient'), {
+    href: '/reference/wavelength-core/#ExternalSeedWalletClient',
+    symbol: 'ExternalSeedWalletClient',
+  });
+  assert.deepEqual(resolveApiLink('startExternalSeedWallet'), {
+    href: '/reference/wavelength-core/#startExternalSeedWallet',
+    symbol: 'startExternalSeedWallet',
+  });
+  assert.deepEqual(resolveApiLink('ExternalSeedWalletRequest'), {
+    href: '/reference/wavelength-core/#ExternalSeedWalletRequest',
+    symbol: 'ExternalSeedWalletRequest',
+  });
+  assert.deepEqual(resolveApiLink('ExternalSeedWalletOpenResult'), {
+    href: '/reference/wavelength-core/#ExternalSeedWalletOpenResult',
+    symbol: 'ExternalSeedWalletOpenResult',
+  });
+});
+
 test('resolves a transport symbol to its package reference page', () => {
   assert.deepEqual(resolveApiLink('createNativeWalletEngine'), {
     href: '/reference/wavelength-react-native/#createNativeWalletEngine',

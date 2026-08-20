@@ -1,7 +1,7 @@
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import {
   createWalletEngine,
-  type WavelengthClient,
+  type ExternalSeedWalletClient,
   type PasskeyCeremony,
   type DistributiveOmit,
   type WalletEngine,
@@ -15,11 +15,12 @@ import {
 } from './passkey.ts';
 
 /**
- * Creates a {@link WavelengthClient} backed by the React Native transport: the
- * daemon compiled into the app via the gomobile bindings. Takes no options
- * today; an options parameter can be added later without a breaking change.
+ * Creates an {@link ExternalSeedWalletClient} backed by the React Native
+ * transport: the daemon compiled into the app via the gomobile bindings. Takes
+ * no options today; an options parameter can be added later without a breaking
+ * change.
  */
-export function createNativeClient(): WavelengthClient {
+export function createNativeClient(): ExternalSeedWalletClient {
   // NativeModules.Wavelength is the interop view of the Turbo Module; the
   // emitter needs it (or any module carrying addListener/removeListeners) to
   // route 'wavelengthActivity' device events on both platforms.

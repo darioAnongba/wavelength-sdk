@@ -11,6 +11,10 @@ const ios = new URL('../ios/WavelengthModule.mm', import.meta.url);
 
 const nativeMethods = {
   start: ['Mobile.start', 'MobileStart'],
+  startExternalSeedWallet: [
+    'Mobile.startExternalSeedWallet',
+    'MobileStartExternalSeedWallet',
+  ],
   stop: ['Mobile.stop', 'MobileStop'],
   getInfo: ['Mobile.getInfo', 'MobileGetInfo'],
   status: ['Mobile.status', 'MobileStatus'],
@@ -94,6 +98,19 @@ describe('native facade dispatch', () => {
 
     assert.deepEqual(androidDispatch(kt), expectedAndroid);
     assert.deepEqual(iosDispatch(mm), expectedIos);
+  });
+
+  it('forwards external-seed starts as byte request and result values', async () => {
+    const { kt, mm } = await readNativeSources();
+
+    assert.match(
+      kt,
+      /"startExternalSeedWallet"\s*->\s*Mobile\.startExternalSeedWallet\(params\)\.toString\(Charsets\.UTF_8\)/,
+    );
+    assert.match(
+      mm,
+      /\[method isEqualToString:@"startExternalSeedWallet"\]\)\s*\{\s*result = MobileStartExternalSeedWallet\(params, &error\);/,
+    );
   });
 
   for (const [method, kind] of Object.entries(scalarMethods)) {

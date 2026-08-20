@@ -106,6 +106,8 @@ RCT_EXPORT_MODULE(Wavelength)
 
     if ([method isEqualToString:@"start"]) {
       MobileStart(paramsJson, &error);
+    } else if ([method isEqualToString:@"startExternalSeedWallet"]) {
+      result = MobileStartExternalSeedWallet(params, &error);
     } else if ([method isEqualToString:@"stop"]) {
       MobileStop(&error);
     } else if ([method isEqualToString:@"getInfo"]) {

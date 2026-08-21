@@ -37,7 +37,8 @@ import {
 
 console.log(RUNTIME_ASSET_FILES);
 // wavewalletdk.wasm, wavewalletdk.wasm.gz, wasm_exec.js, sqlite-bridge.js,
-// sqlite-worker.js, sqlite3.js, sqlite3.wasm, sqlite3-opfs-async-proxy.js
+// sqlite-worker.js, sqlite-node-vfs.js, sqlite3.js, sqlite3.wasm,
+// sqlite3-opfs-async-proxy.js
 ```
 
 ## Get the asset set
@@ -70,7 +71,8 @@ make -C /path/to/wavelength wasm-wallet
 # RUNTIME_MANIFEST_VERSION (example: Vite public/)
 mkdir -p "./public/wavewalletdk/<version>"
 for f in wavewalletdk.wasm wavewalletdk.wasm.gz wasm_exec.js sqlite-bridge.js \
-         sqlite-worker.js sqlite3.js sqlite3.wasm sqlite3-opfs-async-proxy.js; do
+         sqlite-worker.js sqlite-node-vfs.js sqlite3.js sqlite3.wasm \
+         sqlite3-opfs-async-proxy.js; do
   cp "/path/to/wavelength/bin/wasm/$f" "./public/wavewalletdk/<version>/"
 done
 ```
@@ -135,7 +137,7 @@ its decompressed bytes against the same digest entry as `wavewalletdk.wasm`,
 since decompressing it yields identical content.
 
 The remaining files in the asset set (the sqlite worker chain:
-`sqlite-worker.js`, `sqlite3.js`, `sqlite3.wasm`,
+`sqlite-worker.js`, `sqlite-node-vfs.js`, `sqlite3.js`, `sqlite3.wasm`,
 `sqlite3-opfs-async-proxy.js`) are not verified at runtime. Cover them by
 checking your deployed set at deploy time instead: `RUNTIME_ASSET_DIGESTS`
 exports the digest for every file in the set, keyed by filename in the same

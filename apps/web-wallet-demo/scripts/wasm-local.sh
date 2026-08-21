@@ -23,7 +23,7 @@ make -C "$WAVELENGTH" wasm-wallet
 # legacy unversioned layout at the public/ root, so stale copies do not ride
 # into dist/ (public/ is an ephemeral, gitignored staging area).
 rm -rf "$APP/public/runtime"
-rm -f "$APP"/public/{wavewalletdk.wasm,wavewalletdk.wasm.gz,wasm_exec.js,sqlite-bridge.js,sqlite-worker.js,sqlite3.js,sqlite3.wasm,sqlite3-opfs-async-proxy.js}
+rm -f "$APP"/public/{wavewalletdk.wasm,wavewalletdk.wasm.gz,wasm_exec.js,sqlite-bridge.js,sqlite-worker.js,sqlite-node-vfs.js,sqlite3.js,sqlite3.wasm,sqlite3-opfs-async-proxy.js}
 PUB="$APP/public/runtime/$VERSION"
 mkdir -p "$PUB"
 
@@ -33,7 +33,8 @@ mkdir -p "$PUB"
 # Keep the file list in sync with packages/web/src/runtime-manifest.ts
 # (RUNTIME_ASSET_FILES) and fetch-runtime-assets.sh.
 for f in wavewalletdk.wasm wavewalletdk.wasm.gz wasm_exec.js sqlite-bridge.js \
-         sqlite-worker.js sqlite3.js sqlite3.wasm sqlite3-opfs-async-proxy.js; do
+         sqlite-worker.js sqlite-node-vfs.js sqlite3.js sqlite3.wasm \
+         sqlite3-opfs-async-proxy.js; do
   cp "$WAVELENGTH/bin/wasm/$f" "$PUB/"
 done
 

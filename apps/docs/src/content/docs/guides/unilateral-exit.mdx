@@ -93,9 +93,10 @@ function ExitPlan({ outpoints }: { outpoints: string[] }) {
 If `canStart` is `false`, check each `ExitPlanEntry.infeasibilityReason`: a
 plain funding shortfall is fixable by sending sats to `fundingAddress`, but
 `sweep_below_dust` and `uneconomical` are structural and no amount of funding
-helps. [`isExitInfeasibilityFundable`](/reference/wavelength-core/#isExitInfeasibilityFundable)
-makes that split for you, so you can show a "fund your wallet" affordance for
-the fixable case and a plain "can't exit this VTXO" message for the rest.
+helps. `round_committed` means a cooperative round currently owns the VTXO;
+show `roundCommitment` and normally wait for that round instead of asking for
+more funds. [`isExitInfeasibilityFundable`](/reference/wavelength-core/#isExitInfeasibilityFundable)
+identifies only the cases a wallet top-up can resolve.
 
 ## Start a single exit
 

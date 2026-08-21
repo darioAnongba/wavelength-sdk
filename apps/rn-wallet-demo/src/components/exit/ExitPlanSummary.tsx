@@ -133,7 +133,7 @@ const makeStyles = (p: Palette) => ({
 
 // ExitPlanSummary previews a unilateral exit: the aggregate funding the backing
 // wallet needs, plus, for each outpoint that cannot start, either a fundable
-// "top up this address" affordance or a terminal structural message. The
+// "top up this address" affordance or reason-specific guidance. The
 // Re-check control re-runs the plan; ExitScreen owns the plan and supplies it.
 export function ExitPlanSummary({
   plan,
@@ -194,10 +194,15 @@ export function ExitPlanSummary({
                   <Text style={styles.structuralKey}>
                     {shortKey(p.outpoint)}
                   </Text>
-                  : cannot be exited economically ({p.infeasibilityReason}).
-                  {p.infeasibilityReason === 'uneconomical'
-                    ? ' The recovery fee is more than the VTXO is worth at the current fee rate; a larger VTXO or a lower fee rate makes it economical.'
-                    : ''}
+                  {p.infeasibilityReason === 'round_committed'
+                    ? `: committed to a cooperative round${
+                        p.roundCommitment ? ` (${p.roundCommitment})` : ''
+                      }. Wait for that round to confirm; if the operator is unavailable, manual unilateral recovery remains available.`
+                    : `: cannot be exited economically (${p.infeasibilityReason}).${
+                        p.infeasibilityReason === 'uneconomical'
+                          ? ' The recovery fee is more than the VTXO is worth at the current fee rate; a larger VTXO or a lower fee rate makes it economical.'
+                          : ''
+                      }`}
                 </Text>
               </View>
             ),

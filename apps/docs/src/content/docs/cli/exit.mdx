@@ -42,6 +42,10 @@ wavecli --no-tls exit --outpoint 4b2e9f1a7c3d5e6f...:0
 }
 ```
 
+The response stays machine-readable JSON on stdout. On stderr, the CLI also
+states whether it queued a cooperative leave or started a unilateral exit and
+names the command to use to follow that mode.
+
 ## Subcommands
 
 ### `exit status`

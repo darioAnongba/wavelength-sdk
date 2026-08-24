@@ -1888,6 +1888,7 @@ export const exitPlanEntrySig = `type ExitPlanEntry = {
   exitStatus: ExitJobStatus;
   sweepTxid: string;
   lastError: string;
+  roundCommitment: string;
   err: string;
 };`;
 export const exitInfeasibilityReasonSig = `type ExitInfeasibilityReason =
@@ -1895,7 +1896,8 @@ export const exitInfeasibilityReasonSig = `type ExitInfeasibilityReason =
   | 'sweep_below_dust'
   | 'uneconomical'
   | 'wallet_underfunded'
-  | 'wallet_too_few_inputs';`;
+  | 'wallet_too_few_inputs'
+  | 'round_committed';`;
 
 export const exitBatchSig = `function exitBatch(
   opts: ExitBatchOptions & {
@@ -2252,19 +2254,20 @@ previewed VTXO outpoint.
   { name: 'recommendedTotalFundingSat', type: 'number', desc: 'The recommended total funding amount, in sats.' },
   { name: 'fundingShortfallSat', type: 'number', desc: 'The funding still needed before this outpoint can exit, in sats.' },
   { name: 'canStart', type: 'boolean', desc: 'Whether this outpoint is ready to exit right now.' },
-  { name: 'infeasibilityReason', type: 'ExitInfeasibilityReason', desc: 'Why canStart is false: a structural block (a dust or uneconomical VTXO) or a funding shortfall the wallet could cover. It is "unspecified" when canStart is true.' },
+  { name: 'infeasibilityReason', type: 'ExitInfeasibilityReason', desc: 'Why canStart is false: a structural block, a funding shortfall, or a cooperative-round commitment. It is "unspecified" when canStart is true.' },
   { name: 'exitJobFound', type: 'boolean', desc: 'Whether an exit job already exists for this outpoint.' },
   { name: 'exitStatus', type: 'ExitJobStatus', desc: 'The existing job’s status, when exitJobFound is true.' },
   { name: 'sweepTxid', type: 'string', desc: 'The sweep transaction id, once known.' },
   { name: 'lastError', type: 'string', desc: 'The last error the existing job recorded, if any.' },
+  { name: 'roundCommitment', type: 'string', desc: 'The cooperative round holding this VTXO, or an empty string when no round owns it.' },
   { name: 'err', type: 'string', desc: 'A per-outpoint failure encountered while building this plan entry (empty on success).' },
 ]} />
 
 <ApiTypeLabel name="ExitInfeasibilityReason" />
 
-Explains why a previewed exit cannot start. A structural block (dust or
-uneconomical) is one no amount of wallet funding fixes; the others are funding
-shortfalls the wallet could cover.
+Explains why a previewed exit cannot start. Structural blocks (dust or
+uneconomical) and cooperative-round commitments are not fixed by wallet
+funding; the wallet reasons are funding shortfalls the caller can cover.
 
 <Signature title="wavelength-core.d.ts" code={exitInfeasibilityReasonSig} />
 
@@ -2275,6 +2278,7 @@ shortfalls the wallet could cover.
 | `uneconomical` | The total on-chain cost to recover the VTXO exceeds the configured fraction of its value. |
 | `wallet_underfunded` | The confirmed on-chain wallet balance is too small to cover the CPFP fees. Funding the wallet resolves it. |
 | `wallet_too_few_inputs` | The wallet has fewer usable confirmed UTXOs than the VTXO has independent ancestry paths, so it lacks distinct CPFP fee inputs. |
+| `round_committed` | A cooperative round currently owns the VTXO. `roundCommitment` identifies it; normally wait for the round to settle, while manual unilateral recovery remains available if the operator is unreachable. |
 
 </ApiSymbol>
 

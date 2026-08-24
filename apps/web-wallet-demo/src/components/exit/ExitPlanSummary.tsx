@@ -10,7 +10,7 @@ import { CopyRow } from "../ui/CopyRow";
 
 // ExitPlanSummary previews a unilateral exit: the aggregate funding the backing
 // wallet needs, plus, for each outpoint that cannot start, either a fundable
-// "top up this address" affordance or a terminal structural message. The
+// "top up this address" affordance or reason-specific guidance. The
 // Re-check control re-runs the plan; ExitScreen owns the plan and supplies it.
 export function ExitPlanSummary({
   plan,
@@ -63,16 +63,28 @@ export function ExitPlanSummary({
               >
                 <TriangleAlert size={14} className="mt-0.5 shrink-0" />
                 <span className="break-words">
-                  <span className="font-mono">{shortKey(p.outpoint)}</span>:
-                  cannot be exited economically ({p.infeasibilityReason}).
-                  {p.infeasibilityReason === "uneconomical" ? (
+                  <span className="font-mono">{shortKey(p.outpoint)}</span>:{" "}
+                  {p.infeasibilityReason === "round_committed" ? (
                     <>
-                      {" "}
-                      The recovery fee is more than the VTXO is worth at the
-                      current fee rate; a larger VTXO or a lower fee rate makes
-                      it economical.
+                      committed to a cooperative round
+                      {p.roundCommitment ? ` (${p.roundCommitment})` : ""}.
+                      Wait for that round to confirm; if the operator is
+                      unavailable, manual unilateral recovery remains
+                      available.
                     </>
-                  ) : null}
+                  ) : (
+                    <>
+                      cannot be exited economically ({p.infeasibilityReason}).
+                      {p.infeasibilityReason === "uneconomical" ? (
+                        <>
+                          {" "}
+                          The recovery fee is more than the VTXO is worth at the
+                          current fee rate; a larger VTXO or a lower fee rate
+                          makes it economical.
+                        </>
+                      ) : null}
+                    </>
+                  )}
                 </span>
               </p>
             ),

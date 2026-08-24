@@ -31,6 +31,7 @@ function planEntry(outpoint: string, over: Record<string, unknown> = {}) {
     exitStatus: 'unspecified',
     sweepTxid: '',
     lastError: '',
+    roundCommitment: '',
     err: '',
     ...over,
   };
@@ -42,9 +43,10 @@ describe('isExitInfeasibilityFundable', () => {
     assert.equal(isExitInfeasibilityFundable('wallet_too_few_inputs'), true);
   });
 
-  it('classifies structural reasons as not fundable', () => {
+  it('classifies non-funding reasons as not fundable', () => {
     assert.equal(isExitInfeasibilityFundable('sweep_below_dust'), false);
     assert.equal(isExitInfeasibilityFundable('uneconomical'), false);
+    assert.equal(isExitInfeasibilityFundable('round_committed'), false);
     assert.equal(isExitInfeasibilityFundable('unspecified'), false);
   });
 });

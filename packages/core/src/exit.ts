@@ -53,11 +53,10 @@ export type ExitBatchResult = {
 };
 
 /**
- * Distinguishes a fixable exit-infeasibility (the backing wallet needs more
- * confirmed funds or inputs) from a structural one (the VTXO cannot be exited
- * economically at all). Use it to decide whether to show a "fund your wallet"
- * affordance or a terminal "cannot exit this VTXO" message. Mirrors the
- * daemon's own `ExitInfeasibility.Impossible()` split.
+ * Reports whether additional confirmed backing-wallet funds or inputs can
+ * resolve an exit infeasibility. A false result may be a structural economic
+ * block or a temporary cooperative-round commitment, so callers should inspect
+ * the reason before choosing their non-funding guidance.
  */
 export function isExitInfeasibilityFundable(
   reason: ExitInfeasibilityReason,

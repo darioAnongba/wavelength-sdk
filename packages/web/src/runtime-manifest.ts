@@ -19,6 +19,7 @@ export const RUNTIME_ASSETS = Object.freeze({
   wasmExec: 'wasm_exec.js',
   sqliteBridge: 'sqlite-bridge.js',
   sqliteWorker: 'sqlite-worker.js',
+  sqliteNodeVfs: 'sqlite-node-vfs.js',
   sqlite: 'sqlite3.js',
   sqliteWasm: 'sqlite3.wasm',
   sqliteOpfsProxy: 'sqlite3-opfs-async-proxy.js',
@@ -45,11 +46,12 @@ export const RUNTIME_ASSET_FILES: readonly string[] =
  */
 export const RUNTIME_ASSET_DIGESTS: Readonly<Record<string, string>> =
   Object.freeze({
-    'wavewalletdk.wasm': 'sha256-ho6Ke1bEndFQ5iI4/8JqdlTB4gM8jIiaq4Ds6I5wRmI=',
-    'wavewalletdk.wasm.gz': 'sha256-QJDrrqicMbvU6eTeqES/r8vbwTgDyu1kD63fNBf7+Ak=',
+    'wavewalletdk.wasm': 'sha256-BVk5wduDtkThxQJec/RhnrRdG14hn4zG1kVaY62yhls=',
+    'wavewalletdk.wasm.gz': 'sha256-NmiIa5OzYSJDPXDgBojihKgZipkart5I6C8I+VL/rb4=',
     'wasm_exec.js': 'sha256-DJSfSZb5qJaY5LXFht4yJJw7abe6rbZNIgBzzASsuhQ=',
-    'sqlite-bridge.js': 'sha256-WvlgAYAAemwc55zlPx1L2YPDyrx1J2HXe0Sf5RKhcGY=',
-    'sqlite-worker.js': 'sha256-ddNoKARRiAtefqxLvOfRotkLFUZzStZ4PZ2HEt3aN+k=',
+    'sqlite-bridge.js': 'sha256-kpX8OUkepu51hzYlkgpOCPXzo+LARvUM3nkSveZSXRs=',
+    'sqlite-worker.js': 'sha256-0n/tQALRgOug0J4lxN5u2tlZPV7DOffcfN8dUa1L77M=',
+    'sqlite-node-vfs.js': 'sha256-tkCrDkmF1wkEhNNcX1Y4S7Znsyon5zGcyHDpoAly5Cg=',
     'sqlite3.js': 'sha256-zrflgDHuusFRxaA3S8i7gt/2IhusVZR2YgEafLSFusk=',
     'sqlite3.wasm': 'sha256-TdUvrfXXbgq+424HRBuqK1OnYNFZHTuhIA7KiOEegsY=',
     'sqlite3-opfs-async-proxy.js': 'sha256-TqK8vXFbDVYIn8hx6iQfjFmF2GadHd7Kq01WqNqAbOk=',

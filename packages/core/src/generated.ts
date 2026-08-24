@@ -201,6 +201,28 @@ export interface SubscribeGapError {
 }
 
 //////////
+// source: external_seed.go
+
+/**
+ * ExternalSeedWalletRequest opens the wallet at an explicit daemon data
+ * directory from already-derived aezeed entropy. SeedEntropy must contain
+ * exactly aezeed.EntropySize bytes. Wavelength does not assign BIP39, BIP32,
+ * account-index, network, or storage-path semantics to those bytes; the host
+ * SDK owns that versioned derivation and selects Config.DataDir.
+ * ExpectedIdentityPubKey optionally binds the selected directory to a
+ * previously persisted Wavelength identity. RecoverState is an explicit
+ * per-open operation: setting it on an existing wallet reruns the idempotent
+ * recovery scan, including after a prior scan failed. Callers should leave it
+ * false for ordinary starts after recovery has succeeded.
+ */
+export interface ExternalSeedWalletRequest {
+  seedEntropy: string /* []byte */;
+  expectedIdentityPubKey: string;
+  recoverState: boolean;
+  recoveryWindow: number /* uint32 */;
+}
+
+//////////
 // source: passkey.go
 
 
@@ -363,6 +385,22 @@ export interface OpenWalletResult {
   imported: boolean;
   mnemonic: string[];
   identityPubKey: string;
+}
+/**
+ * ExternalSeedWalletOpenResult reports an external-seed wallet import or
+ * unlock and the optional state-recovery scan performed for that operation.
+ * It deliberately omits the transient internal aezeed mnemonic: the host-owned
+ * external root and derivation contract are the wallet's backup boundary.
+ */
+export interface ExternalSeedWalletOpenResult {
+  imported: boolean;
+  identityPubKey: string;
+  recoveryRan: boolean;
+  recoveredBoardingAddresses: number /* uint32 */;
+  recoveredBoardingUTXOs: number /* uint32 */;
+  recoveredVTXOs: number /* uint32 */;
+  recoveredOORReceiveScripts: number /* uint32 */;
+  recoveredOORRecipientEvents: number /* uint32 */;
 }
 /**
  * Balance is the wallet-level balance view.
@@ -898,6 +936,13 @@ export interface ExitPlanEntry {
   sweepTxid: string;
   lastError: string;
   /**
+   * RoundCommitment names the cooperative round holding this VTXO, or
+   * is empty when it is not committed to one. It is advisory: the entry
+   * is still priced and the manual exit still performs it, so the
+   * funding figures remain the ones a recovery needs.
+   */
+  roundCommitment: string;
+  /**
    * Err is a per-outpoint failure (empty on success).
    */
   err: string;
@@ -909,12 +954,13 @@ export interface ExitPlanEntry {
  * inputs). It is a wrapper-owned lowercase string set, decoupled from the
  * proto enum numbering.
  */
-export type ExitInfeasibilityReason = "unspecified" | "sweep_below_dust" | "uneconomical" | "wallet_underfunded" | "wallet_too_few_inputs";
+export type ExitInfeasibilityReason = "unspecified" | "sweep_below_dust" | "uneconomical" | "wallet_underfunded" | "wallet_too_few_inputs" | "round_committed";
 export const ExitInfeasibilityReasonUnspecified: ExitInfeasibilityReason = "unspecified";
 export const ExitInfeasibilityReasonSweepBelowDust: ExitInfeasibilityReason = "sweep_below_dust";
 export const ExitInfeasibilityReasonUneconomical: ExitInfeasibilityReason = "uneconomical";
 export const ExitInfeasibilityReasonWalletUnderfunded: ExitInfeasibilityReason = "wallet_underfunded";
 export const ExitInfeasibilityReasonWalletTooFewInputs: ExitInfeasibilityReason = "wallet_too_few_inputs";
+export const ExitInfeasibilityReasonRoundCommitted: ExitInfeasibilityReason = "round_committed";
 /**
  * GetExitPlanResult describes the combined backing-wallet funding plan for
  * every previewed outpoint plus aggregate totals.

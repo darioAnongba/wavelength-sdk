@@ -325,6 +325,7 @@ The values are fixed filenames, not just string-typed placeholders:
 | `wasmExec` | `wasm_exec.js` |
 | `sqliteBridge` | `sqlite-bridge.js` |
 | `sqliteWorker` | `sqlite-worker.js` |
+| `sqliteNodeVfs` | `sqlite-node-vfs.js` |
 | `sqlite` | `sqlite3.js` |
 | `sqliteWasm` | `sqlite3.wasm` |
 | `sqliteOpfsProxy` | `sqlite3-opfs-async-proxy.js` |
@@ -335,10 +336,10 @@ The values are fixed filenames, not just string-typed placeholders:
 
 Flat list of every runtime binary that must be hosted together at
 `runtimeBaseUrl`: `wavewalletdk.wasm`, `wavewalletdk.wasm.gz`, `wasm_exec.js`,
-`sqlite-bridge.js`, `sqlite-worker.js`, `sqlite3.js`, `sqlite3.wasm`,
-`sqlite3-opfs-async-proxy.js` (that is, `Object.values(RUNTIME_ASSETS)`). Host
-these files and point `runtimeBaseUrl` at them before calling
-`client.ready()`.
+`sqlite-bridge.js`, `sqlite-worker.js`, `sqlite-node-vfs.js`, `sqlite3.js`,
+`sqlite3.wasm`, `sqlite3-opfs-async-proxy.js` (that is,
+`Object.values(RUNTIME_ASSETS)`). Host these files and point `runtimeBaseUrl`
+at them before calling `client.ready()`.
 
 <Signature title="wavelength-web.d.ts" code={runtimeAssetFilesSig} />
 

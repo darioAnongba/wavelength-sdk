@@ -7,6 +7,8 @@ import {
 } from './client.ts';
 import type { WavelengthEvent } from '@lightninglabs/wavelength-core';
 
+const FINAL_PROFILE_DATA_DIR = '/data/wavelength/wdk/regtest/account-7';
+
 // A scriptable fake of the native module: records calls, replays canned JSON,
 // and hands the test the event listener so it can inject activity events.
 function makeFake() {
@@ -16,6 +18,7 @@ function makeFake() {
   let startActivityCount = 0;
   let stopActivityCount = 0;
   let stopActivityRejects = false;
+  let defaultDataDirCount = 0;
   let deferredStop: { promise: Promise<void>; resolve: () => void } | null = null;
   let listener: ((event: NativeActivityEvent) => void) | null = null;
   let unsubscribed = 0;
@@ -44,6 +47,7 @@ function makeFake() {
         : Promise.resolve();
     },
     getDefaultDataDir() {
+      defaultDataDirCount += 1;
       return Promise.resolve('/data/wavelength');
     },
   };
@@ -74,7 +78,12 @@ function makeFake() {
       return () => deferredStop!.resolve();
     },
     emit: (e: NativeActivityEvent) => listener?.(e),
-    counts: () => ({ startActivityCount, stopActivityCount, unsubscribed }),
+    counts: () => ({
+      startActivityCount,
+      stopActivityCount,
+      defaultDataDirCount,
+      unsubscribed,
+    }),
   };
 }
 
@@ -129,6 +138,63 @@ describe('NativeWavelengthClient', () => {
 
     const cfg = JSON.parse(fake.calls[0].paramsJson) as Record<string, unknown>;
     assert.equal(cfg.data_dir, '/custom');
+  });
+
+  it('startExternalSeedWallet preserves the final profile config', async () => {
+    const fake = makeFake();
+    const client = new NativeWavelengthClient(fake.native, fake.subscribe);
+    fake.responses.set('startExternalSeedWallet', JSON.stringify({
+      Imported: true,
+      IdentityPubKey: 'identity',
+      RecoveryRan: true,
+      RecoveredBoardingAddresses: 1,
+      RecoveredBoardingUTXOs: 2,
+      RecoveredVTXOs: 3,
+      RecoveredOORReceiveScripts: 4,
+      RecoveredOORRecipientEvents: 5,
+    }));
+
+    const result = await client.startExternalSeedWallet(
+      {
+        network: 'regtest',
+        dataDir: FINAL_PROFILE_DATA_DIR,
+        arkServerAddress: 'h:7070',
+      },
+      {
+        seedEntropy: Uint8Array.from({ length: 16 }, (_, index) => index),
+        expectedIdentityPubKey: 'identity',
+        recoverState: true,
+        recoveryWindow: 37,
+      },
+    );
+
+    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls[0].method, 'startExternalSeedWallet');
+    assert.deepEqual(JSON.parse(fake.calls[0].paramsJson), {
+      config: {
+        data_dir: FINAL_PROFILE_DATA_DIR,
+        network: 'regtest',
+        server_address: 'h:7070',
+        server_transport: 'grpc',
+        swap_server_transport: 'grpc',
+        wallet_type: 'lwwallet',
+      },
+      seed_entropy: 'AAECAwQFBgcICQoLDA0ODw==',
+      expected_identity_pubkey: 'identity',
+      recover_state: true,
+      recovery_window: 37,
+    });
+    assert.equal(fake.counts().defaultDataDirCount, 0);
+    assert.deepEqual(result, {
+      imported: true,
+      identityPubKey: 'identity',
+      recoveryRan: true,
+      recoveredBoardingAddresses: 1,
+      recoveredBoardingUTXOs: 2,
+      recoveredVTXOs: 3,
+      recoveredOORReceiveScripts: 4,
+      recoveredOORRecipientEvents: 5,
+    });
   });
 
   it('wraps native rejections in WavelengthError', async () => {

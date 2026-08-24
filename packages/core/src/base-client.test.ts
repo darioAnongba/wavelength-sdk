@@ -39,9 +39,13 @@ describe('BaseWavelengthClient', () => {
   it('callFacade accepts every portable method and rejects worker/raw verbs', async () => {
     const client = new FakeClient();
     for (const method of FACADE_METHODS) {
-      // start/stop are guarded (asserted separately below); they run only
-      // through the typed start()/stop().
-      if (method === 'start' || method === 'stop') {
+      // Lifecycle verbs are guarded (asserted separately below); they run only
+      // through their typed methods.
+      if (
+        method === 'start' ||
+        method === 'startExternalSeedWallet' ||
+        method === 'stop'
+      ) {
         continue;
       }
       await client.callFacade(method);
@@ -58,12 +62,20 @@ describe('BaseWavelengthClient', () => {
 
   it('callFacade rejects the lifecycle verbs so the runtime lock is not bypassed', async () => {
     const client = new FakeClient();
-    for (const verb of ['start', 'stop'] as const) {
+    const lifecycleCalls = [
+      ['start', 'start()'],
+      [
+        'startExternalSeedWallet',
+        'ExternalSeedWalletClient.startExternalSeedWallet()',
+      ],
+      ['stop', 'stop()'],
+    ] as const;
+    for (const [verb, typedCall] of lifecycleCalls) {
       await assert.rejects(
         () => client.callFacade(verb),
         (err: unknown) => {
           assert.ok(err instanceof WavelengthError);
-          assert.match(err.message, new RegExp(`Call ${verb}\\(\\)`));
+          assert.ok(err.message.includes(`Call ${typedCall}`));
 
           return true;
         },
@@ -123,6 +135,76 @@ describe('BaseWavelengthClient', () => {
       (err: WavelengthError) => err.code === 'invalid_config',
     );
     assert.equal(client.calls.some((call) => call.method === 'start'), false);
+  });
+
+  it('maps external seed startup to the private snake-case envelope', async () => {
+    const client = new FakeClient();
+    client.responses.set('startExternalSeedWallet', {
+      Imported: true,
+      IdentityPubKey: 'identity',
+    });
+    const entropy = Uint8Array.from({ length: 16 }, (_, index) => index);
+    const result = await client.startExternalSeedWallet(
+      {
+        network: 'regtest',
+        dataDir: '/wallets',
+        arkServerAddress: 'h:7070',
+      },
+      {
+        seedEntropy: entropy,
+        expectedIdentityPubKey: 'identity',
+        recoverState: true,
+        recoveryWindow: 99,
+      },
+    );
+
+    assert.deepEqual(client.calls[0], {
+      method: 'startExternalSeedWallet',
+      params: {
+        config: {
+          data_dir: '/wallets',
+          network: 'regtest',
+          server_address: 'h:7070',
+          server_transport: 'grpc',
+          swap_server_transport: 'grpc',
+          wallet_type: 'lwwallet',
+        },
+        seed_entropy: Buffer.from(entropy).toString('base64'),
+        expected_identity_pubkey: 'identity',
+        recover_state: true,
+        recovery_window: 99,
+      },
+    });
+    assert.equal(result.identityPubKey, 'identity');
+    assert.equal(Object.hasOwn(result, 'mnemonic'), false);
+  });
+
+  it('rejects invalid entropy and a missing final dataDir before dispatch', async () => {
+    const client = new FakeClient();
+    for (const seedEntropy of [new Uint8Array(15), new Uint8Array(17)]) {
+      await assert.rejects(
+        client.startExternalSeedWallet(
+          {
+            network: 'regtest',
+            dataDir: '/wallets',
+            arkServerAddress: 'h:7070',
+          },
+          { seedEntropy },
+        ),
+        (err: WavelengthError) => err.code === 'invalid_external_seed',
+      );
+    }
+    await assert.rejects(
+      client.startExternalSeedWallet(
+        { network: 'regtest', arkServerAddress: 'h:7070' },
+        { seedEntropy: new Uint8Array(16) },
+      ),
+      (err: WavelengthError) => err.code === 'invalid_config',
+    );
+    assert.equal(
+      client.calls.some((call) => call.method === 'startExternalSeedWallet'),
+      false,
+    );
   });
 
   it('createWallet sends the Go-shaped request with a base64 password', async () => {

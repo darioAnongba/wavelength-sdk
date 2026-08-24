@@ -32,7 +32,7 @@ exit type families. There is no need to also depend on
 
 export const createWebClientSig = `function createWebClient(
   options?: WebClientOptions,
-): WavelengthClient`;
+): ExternalSeedWalletClient`;
 
 export const webClientOptionsSig = `type WebClientOptions = {
   workerURL?: string;
@@ -56,7 +56,7 @@ export const webWalletEngineOptionsSig = `type WebWalletEngineOptions = WebClien
 
 export const runtimeThreadSig = `type RuntimeThread = 'main' | 'worker';`;
 
-export const mainThreadWavelengthClientSig = `class MainThreadWavelengthClient implements WavelengthClient {
+export const mainThreadWavelengthClientSig = `class MainThreadWavelengthClient implements ExternalSeedWalletClient {
   constructor(options?: WebClientOptions);
 }`;
 
@@ -168,8 +168,10 @@ The per-network endpoint values are on the
 
 <ApiSymbol name="createWebClient" kind="function">
 
-Creates and returns a `WavelengthClient` that runs the embedded daemon in the
-browser. Call once at application startup, then wrap it with
+Creates and returns an
+[`ExternalSeedWalletClient`](/reference/wavelength-core/#ExternalSeedWalletClient)
+that runs the embedded daemon in the browser. Call once at application startup,
+then wrap it with
 [`createWalletEngine`](/reference/wavelength-core/#createWalletEngine) from `@lightninglabs/wavelength-core` (or use
 [`createWebWalletEngine`](#creating-an-engine) below to do both in one call)
 or call `start(defaultConfig(network))` directly. Defaults to the Web Worker
@@ -182,7 +184,7 @@ transport ([`WorkerWavelengthClient`](#transports)); pass `runtimeThread:
   { name: 'options', type: 'WebClientOptions', desc: 'Optional browser-specific settings. Defaults to worker-thread mode with page-relative runtime assets.' },
 ]} />
 
-<Returns type="WavelengthClient">
+<Returns type="ExternalSeedWalletClient">
 A live client instance. Call `ready()` to wait for the WASM runtime to load, then `start(config)` to boot the daemon.
 </Returns>
 
@@ -278,7 +280,8 @@ export function Root() {
 <ApiSymbol name="MainThreadWavelengthClient" kind="class">
 
 Runs the wasm runtime on the page's main thread. It implements
-[`WavelengthClient`](/reference/wavelength-core/#WavelengthClient) directly and is
+[`ExternalSeedWalletClient`](/reference/wavelength-core/#ExternalSeedWalletClient)
+directly and is
 the escape hatch for environments without Web Worker support (or where
 main-thread execution is preferred for another reason). Unlike worker mode it
 blocks rendering while the runtime is busy.
@@ -303,6 +306,24 @@ the encrypted seed in OPFS rather than `localStorage` (which is window-only
 and unavailable inside a Worker); the daemon shipped with this package already
 does this. See the [browser support guide](/web/support/browser-support/) for
 which browsers provide OPFS and the other APIs worker mode depends on.
+
+### External-seed profile locking
+
+[`startExternalSeedWallet()`](/reference/wavelength-core/#startExternalSeedWallet)
+requires a final `dataDir` and exactly 16 bytes of caller-derived entropy. The
+web package does not derive entropy or choose profile folders.
+
+In the default worker transport, the Web Lock is scoped to the normalized final
+`dataDir` and `network`. Separate client instances can therefore run different
+profiles concurrently in separate Workers, while a second client selecting the
+same profile fails with `wallet_locked`. The lock name contains no seed
+entropy. Call `stop()` on each client to release its profile.
+
+Legacy `start()` keeps the conservative origin-global lock because ordinary
+runtime configs can redirect writable stores outside `dataDir`. Main-thread
+external-seed starts also keep that global lock because all main-thread clients
+share one page-global Go bridge. Use the default worker transport when an app
+needs simultaneous profiles.
 
 ## Runtime assets and hosting
 

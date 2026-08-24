@@ -30,7 +30,7 @@ activity, list, send, and exit type families. There is no need to also depend
 on `@lightninglabs/wavelength-core` directly.
 </Callout>
 
-export const createNativeClientSig = `function createNativeClient(): WavelengthClient`;
+export const createNativeClientSig = `function createNativeClient(): ExternalSeedWalletClient`;
 
 export const createNativeWalletEngineSig = `function createNativeWalletEngine(
   options?: NativeWalletEngineOptions,
@@ -98,20 +98,52 @@ The per-network endpoint values are on the
 
 <ApiSymbol name="createNativeClient" kind="function">
 
-Creates and returns a `WavelengthClient` backed by the React Native transport:
-the daemon compiled into the app via the gomobile bindings. Takes no options
-in this release; the signature reserves an options object for future use.
-Activity arrives as typed `activity` events, re-emitted here from native
-`wavelengthActivity` device events.
+Creates and returns an
+[`ExternalSeedWalletClient`](/reference/wavelength-core/#ExternalSeedWalletClient)
+backed by the React Native transport: the daemon compiled into the app via the
+gomobile bindings. Takes no options in this release. Activity arrives as typed
+`activity` events, re-emitted here from native `wavelengthActivity` device
+events.
 
 <Signature title="wavelength-react-native.d.ts" code={createNativeClientSig} />
 
-<Returns type="WavelengthClient">
+<Returns type="ExternalSeedWalletClient">
 A live client instance. Call `ready()` (resolves immediately, since the
 runtime is already compiled in) then `start(config)` to boot the daemon.
 </Returns>
 
 </ApiSymbol>
+
+### External-seed startup
+
+The native client forwards
+[`startExternalSeedWallet(config, req)`](/reference/wavelength-core/#startExternalSeedWallet)
+through the gomobile bridge. The integrating application owns seed derivation
+and folder selection: pass a final nonempty `config.dataDir` and exactly 16
+bytes of derived entropy. Unlike ordinary `start()`, this lifecycle never fills
+in the platform default directory implicitly.
+
+```ts
+const client = createNativeClient();
+await client.ready();
+await client.startExternalSeedWallet(
+  { ...config, dataDir: finalProfileDataDir },
+  { seedEntropy: derivedEntropy16 },
+);
+```
+
+The root seed, derivation path, account index, and folder layout remain outside
+this package. Persist the returned `identityPubKey` and supply it as
+`expectedIdentityPubKey` on later opens if the app wants to bind a selected
+folder to the expected wallet identity.
+
+<Callout type="caution" title="Requires local paired bindings">
+This source API depends on
+[lightninglabs/wavelength#1158](https://github.com/lightninglabs/wavelength/pull/1158)
+and is absent from the currently pinned v0.1.1 AAR and XCFramework. Until a
+newer Wavelength release is pinned, build bindings locally from the paired
+Wavelength branch.
+</Callout>
 
 <ApiSymbol name="createNativeWalletEngine" kind="function">
 

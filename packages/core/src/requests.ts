@@ -3,6 +3,7 @@
 // core's facade module keeps explicit request mappers for them.
 
 import type { EntryKind, ListView } from './generated.ts';
+import { WavelengthError } from './errors.ts';
 
 /**
  * Parameters for creating a new wallet.
@@ -46,6 +47,75 @@ export type OpenWalletFromPasskeyRequest = {
   /** The PRF output (hex) derived from the passkey ceremony. */
   prfOutput: string;
 };
+
+/**
+ * Opens one daemon wallet from seed entropy derived by a higher-level owner.
+ * This low-level lifecycle request deliberately contains no root mnemonic,
+ * passphrase, account index, network, or profile location.
+ */
+export type ExternalSeedWalletRequest = {
+  /** Exactly 16 bytes of entropy for the daemon's internal wallet seed. */
+  seedEntropy: Uint8Array;
+  /**
+   * The identity public key observed on a previous open. When supplied, the
+   * daemon refuses to open a wallet whose derived identity does not match.
+   */
+  expectedIdentityPubKey?: string;
+  /** Runs the daemon's state-recovery scan for this open operation. */
+  recoverState?: boolean;
+  /**
+   * Recovery look-ahead for each address family. Only meaningful when
+   * {@link recoverState} is true and must fit in a uint32.
+   */
+  recoveryWindow?: number;
+};
+
+/** Validates entropy and recovery fields before external-seed startup. */
+export function validateExternalSeedWalletRequest(
+  req: ExternalSeedWalletRequest,
+): void {
+  if (!(req.seedEntropy instanceof Uint8Array) || req.seedEntropy.length !== 16) {
+    throw new WavelengthError(
+      'seedEntropy must be a 16-byte Uint8Array',
+      'invalid_external_seed',
+    );
+  }
+
+  if (
+    req.expectedIdentityPubKey !== undefined &&
+    (
+      typeof req.expectedIdentityPubKey !== 'string' ||
+      req.expectedIdentityPubKey === ''
+    )
+  ) {
+    throw new WavelengthError(
+      'expectedIdentityPubKey must be a nonempty string',
+      'invalid_external_seed',
+    );
+  }
+  if (
+    req.recoverState !== undefined &&
+    typeof req.recoverState !== 'boolean'
+  ) {
+    throw new WavelengthError(
+      'recoverState must be a boolean',
+      'invalid_external_seed',
+    );
+  }
+  if (
+    req.recoveryWindow !== undefined &&
+    (
+      !Number.isSafeInteger(req.recoveryWindow) ||
+      req.recoveryWindow < 0 ||
+      req.recoveryWindow > 0xffff_ffff
+    )
+  ) {
+    throw new WavelengthError(
+      'recoveryWindow must be an integer that fits in uint32',
+      'invalid_external_seed',
+    );
+  }
+}
 
 /**
  * Parameters for generating an on-chain deposit address.

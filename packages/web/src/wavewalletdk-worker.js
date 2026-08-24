@@ -34,6 +34,12 @@ function debugTs() {
   return new Date().toISOString().split("T").join(" ").slice(0, -1);
 }
 
+function facadeDebugPayload(method, payload) {
+  return method === "startExternalSeedWallet"
+    ? "[REDACTED external-seed wallet payload]"
+    : payload;
+}
+
 function performanceNow() {
   return self.performance?.now?.() ?? Date.now();
 }
@@ -172,11 +178,17 @@ self.onmessage = async (event) => {
     }
 
     if (debug) {
-      console.log(`${debugTs()} Executing ${method}:`, params);
+      console.log(
+        `${debugTs()} Executing ${method}:`,
+        facadeDebugPayload(method, params),
+      );
     }
     const result = await self.wavewalletdkCall(method, params || {});
     if (debug) {
-      console.log(`${debugTs()} Executed ${method} result:`, result);
+      console.log(
+        `${debugTs()} Executed ${method} result:`,
+        facadeDebugPayload(method, result),
+      );
     }
     self.postMessage({ id, ok: true, result });
   } catch (err) {

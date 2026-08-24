@@ -3,10 +3,12 @@
  * can branch without string-matching the message. The SDK's own failures use the
  * named codes; most daemon-originated errors fall back to `'wavelength_error'`
  * (a richer daemon-code mapping is planned), except storage-contention failures
- * on `start()`, which the web transports map to `'wallet_locked'`. `'wallet_locked'` means the wallet
- * runtime is already open in another tab or window of the same origin: the
- * daemon's OPFS databases are exclusive, so a start attempt fails fast with this
- * code until the other tab stops the runtime or closes. `'runtime_lock_unavailable'`
+ * on `start()` and `startExternalSeedWallet()`, which web maps to
+ * `'wallet_locked'`.
+ * `'wallet_locked'` means the wallet runtime is already open in another tab or
+ * window of the same origin: the daemon's OPFS databases are exclusive, so a
+ * start attempt fails fast until the other tab stops or closes.
+ * `'runtime_lock_unavailable'`
  * means the browser refused or dropped the lock request itself (for example
  * while the document is shutting down), which says nothing about another tab.
  * `'asset_integrity_failed'` means a runtime asset was downloaded in full,
@@ -21,8 +23,10 @@
  * browser message the SDK does not recognize, so it surfaces as the generic
  * `'wavelength_error'` rather than `'asset_load_failed'`. Nor does
  * `'asset_load_failed'` cover a downloaded, verified module that fails to
- * compile, which is not an asset problem and surfaces as
- * `'wavelength_error'` too.
+ * compile, which is not an asset problem and surfaces as `'wavelength_error'`
+ * too. `'invalid_external_seed'` means an external-seed wallet request failed
+ * local validation. `'runtime_active'` means the client already has a runtime
+ * active and must stop it before selecting another external-seed profile.
  * The `(string & {})` arm keeps the union open for forward
  * compatibility while still offering autocomplete on the known codes.
  */
@@ -37,6 +41,8 @@ export type WavelengthErrorCode =
   | 'unsupported_facade_method'
   | 'invalid_cursor'
   | 'invalid_config'
+  | 'invalid_external_seed'
+  | 'runtime_active'
   | (string & {});
 
 /**

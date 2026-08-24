@@ -13,7 +13,9 @@ const pagePaths: Record<ReferencePage, string> = {
 };
 
 const coreSymbols = [
-  'RuntimeConfig', 'Network', 'WavelengthClient', 'ready', 'start', 'stop',
+  'RuntimeConfig', 'Network', 'WavelengthClient', 'ExternalSeedWalletClient',
+  'ready', 'start', 'startExternalSeedWallet', 'ExternalSeedWalletRequest',
+  'ExternalSeedWalletOpenResult', 'stop',
   'dispose', 'createWalletEngine', 'WalletEngine', 'WalletSnapshot', 'RecoveryState',
   'RestoreWalletRequest', 'createWallet', 'unlockWallet', 'openWalletFromPasskey',
   'getInfo', 'status', 'balance', 'WalletInfo', 'WalletStatus', 'Balance', 'ServerInfo', 'deposit',

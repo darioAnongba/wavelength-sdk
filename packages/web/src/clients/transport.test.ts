@@ -589,6 +589,7 @@ describe('activity transport requests', () => {
 
   it('holds the runtime lock across worker start() and releases it on stop()', async () => {
     const { WorkerWavelengthClient } = await import('./worker.ts');
+    const { RUNTIME_LOCK_NAME } = await import('../runtime-lock.ts');
     const savedWorker = (globalThis as { Worker?: unknown }).Worker;
     const savedNavigator = (globalThis as { navigator?: unknown }).navigator;
     const requests: string[] = [];
@@ -617,6 +618,7 @@ describe('activity transport requests', () => {
       const client = new WorkerWavelengthClient({ workerURL: 'fake-worker.js' });
       await client.start({ network: 'regtest', arkServerAddress: 'h:7070' });
       assert.equal(requests.length, 1);
+      assert.equal(requests[0], RUNTIME_LOCK_NAME);
       assert.equal(released, false);
 
       await client.stop();
@@ -962,16 +964,21 @@ describe('activity transport requests', () => {
   // grantingLocks stubs navigator.locks with a lock that is always available,
   // reporting when the holder lets it go.
   function grantingLocks() {
-    const state = { released: false, requests: 0 };
+    const state = {
+      released: false,
+      requests: 0,
+      names: [] as string[],
+    };
     const locks = {
       request: (
-        _name: string,
+        name: string,
         _options: unknown,
         callback: (lock: unknown) => unknown,
       ) => {
         state.requests += 1;
+        state.names.push(name);
 
-        return Promise.resolve(callback({ name: 'lock' })).then(() => {
+        return Promise.resolve(callback({ name })).then(() => {
           state.released = true;
         });
       },
@@ -979,6 +986,269 @@ describe('activity transport requests', () => {
 
     return { state, navigator: { locks } };
   }
+
+  // exclusiveLocks models Web Locks across multiple client instances. A name
+  // remains held until the callback promise settles; a different name can be
+  // granted concurrently.
+  function exclusiveLocks() {
+    const state = {
+      held: new Set<string>(),
+      requested: [] as string[],
+    };
+    const locks = {
+      request: (
+        name: string,
+        _options: unknown,
+        callback: (lock: unknown | null) => unknown,
+      ) => {
+        state.requested.push(name);
+        if (state.held.has(name)) {
+          return Promise.resolve(callback(null));
+        }
+
+        state.held.add(name);
+
+        return Promise.resolve(callback({ name })).finally(() => {
+          state.held.delete(name);
+        });
+      },
+    };
+
+    return { state, navigator: { locks } };
+  }
+
+  it('runs distinct external-seed profiles in separate workers concurrently', async () => {
+    const { WorkerWavelengthClient } = await import('./worker.ts');
+    const { RUNTIME_LOCK_NAME } = await import('../runtime-lock.ts');
+    const savedWorker = (globalThis as { Worker?: unknown }).Worker;
+    const savedNavigator = (globalThis as { navigator?: unknown }).navigator;
+    const locks = exclusiveLocks();
+    Object.defineProperty(globalThis, 'Worker', {
+      configurable: true,
+      value: AutoReplyWorker,
+    });
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: locks.navigator,
+    });
+
+    const clients = [
+      new WorkerWavelengthClient({ workerURL: 'account-0-worker.js' }),
+      new WorkerWavelengthClient({ workerURL: 'account-1-worker.js' }),
+      new WorkerWavelengthClient({ workerURL: 'duplicate-worker.js' }),
+    ];
+    const seedEntropy = new Uint8Array(16);
+
+    try {
+      await clients[0].startExternalSeedWallet(
+        { network: 'signet', dataDir: '/wallets/account-0' },
+        { seedEntropy },
+      );
+      await clients[1].startExternalSeedWallet(
+        { network: 'signet', dataDir: '/wallets/account-1' },
+        { seedEntropy },
+      );
+      assert.equal(locks.state.held.size, 2);
+      assert.equal(locks.state.requested.includes(RUNTIME_LOCK_NAME), false);
+      assert.notEqual(
+        locks.state.requested[0],
+        locks.state.requested[1],
+        'separate profiles must not share a lock',
+      );
+
+      await assert.rejects(
+        clients[2].startExternalSeedWallet(
+          { network: 'signet', dataDir: '/wallets/other/../account-0/' },
+          { seedEntropy },
+        ),
+        (err: unknown) => (err as { code?: string }).code === 'wallet_locked',
+      );
+      assert.equal(
+        locks.state.requested[2],
+        locks.state.requested[0],
+        'equivalent profile paths must share a lock',
+      );
+
+      await Promise.all([clients[0].stop(), clients[1].stop()]);
+      assert.equal(locks.state.held.size, 0);
+    } finally {
+      for (const client of clients) {
+        client.dispose();
+      }
+      Object.defineProperty(globalThis, 'Worker', {
+        configurable: true,
+        value: savedWorker,
+      });
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: savedNavigator,
+      });
+    }
+  });
+
+  it('holds the worker lock for an external-seed wallet until stop', async () => {
+    const { WorkerWavelengthClient } = await import('./worker.ts');
+    const savedWorker = (globalThis as { Worker?: unknown }).Worker;
+    const savedNavigator = (globalThis as { navigator?: unknown }).navigator;
+    const locks = grantingLocks();
+    Object.defineProperty(globalThis, 'Worker', {
+      configurable: true,
+      value: AutoReplyWorker,
+    });
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: locks.navigator,
+    });
+
+    try {
+      const client = new WorkerWavelengthClient({ workerURL: 'fake-worker.js' });
+      const seedEntropy = Uint8Array.from(
+        { length: 16 },
+        (_, index) => index,
+      );
+      await client.startExternalSeedWallet(
+        { network: 'regtest', dataDir: '/wallets' },
+        { seedEntropy },
+      );
+      const starts = FakeWorker.latest!.messages.filter(
+        (message) => message.method === 'startExternalSeedWallet',
+      );
+      assert.equal(starts.length, 1);
+      assert.deepEqual(starts[0].params, {
+        config: {
+          data_dir: '/wallets',
+          network: 'regtest',
+          server_transport: 'rest',
+          wallet_type: 'lwwallet',
+          swap_server_transport: 'rest',
+        },
+        seed_entropy: Buffer.from(seedEntropy).toString('base64'),
+        expected_identity_pubkey: undefined,
+        recover_state: undefined,
+        recovery_window: undefined,
+      });
+      assert.equal(locks.state.released, false);
+
+      await assert.rejects(
+        client.startExternalSeedWallet(
+          { network: 'regtest', dataDir: '/wallets' },
+          { seedEntropy: new Uint8Array(16) },
+        ),
+        (err: unknown) => (err as { code?: string }).code === 'runtime_active',
+      );
+      assert.equal(
+        FakeWorker.latest!.messages.filter(
+          (message) => message.method === 'startExternalSeedWallet',
+        ).length,
+        1,
+      );
+
+      await client.stop();
+      await Promise.resolve();
+      assert.equal(locks.state.released, true);
+      client.dispose();
+    } finally {
+      Object.defineProperty(globalThis, 'Worker', {
+        configurable: true,
+        value: savedWorker,
+      });
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: savedNavigator,
+      });
+    }
+  });
+
+  it('serializes and redacts main-thread external seed startup', async () => {
+    const { MainThreadWavelengthClient } = await import('./main.ts');
+    const { RUNTIME_LOCK_NAME } = await import('../runtime-lock.ts');
+    const savedCall = (globalThis as { wavewalletdkCall?: unknown }).wavewalletdkCall;
+    const savedNavigator = (globalThis as { navigator?: unknown }).navigator;
+    const savedAddEventListener = globalThis.addEventListener;
+    const savedRemoveEventListener = globalThis.removeEventListener;
+    const savedLog = console.log;
+    const locks = grantingLocks();
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const logs: unknown[][] = [];
+    Object.defineProperty(globalThis, 'wavewalletdkCall', {
+      configurable: true,
+      value: async (method: string, params: unknown) => {
+        calls.push({ method, params });
+        if (method === 'startExternalSeedWallet') {
+          return {
+            Imported: true,
+            IdentityPubKey: 'identity',
+          };
+        }
+
+        return null;
+      },
+    });
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: locks.navigator,
+    });
+    Object.defineProperty(globalThis, 'addEventListener', {
+      configurable: true,
+      value: () => undefined,
+    });
+    Object.defineProperty(globalThis, 'removeEventListener', {
+      configurable: true,
+      value: () => undefined,
+    });
+    console.log = (...args: unknown[]) => logs.push(args);
+
+    try {
+      const client = new MainThreadWavelengthClient({ debug: true });
+      const seedEntropy = Uint8Array.from(
+        { length: 16 },
+        (_, index) => index,
+      );
+      await client.startExternalSeedWallet(
+        { network: 'regtest', dataDir: '/wallets' },
+        { seedEntropy },
+      );
+      assert.equal(calls[0].method, 'startExternalSeedWallet');
+      assert.deepEqual(locks.state.names, [RUNTIME_LOCK_NAME]);
+      assert.equal(locks.state.released, false);
+      await assert.rejects(
+        client.startExternalSeedWallet(
+          { network: 'regtest', dataDir: '/wallets' },
+          { seedEntropy: new Uint8Array(16) },
+        ),
+      );
+
+      const renderedLogs = JSON.stringify(logs);
+      assert.equal(
+        renderedLogs.includes(Buffer.from(seedEntropy).toString('base64')),
+        false,
+      );
+      assert.match(renderedLogs, /REDACTED external-seed wallet payload/);
+
+      await client.stop();
+      await Promise.resolve();
+      assert.equal(locks.state.released, true);
+      client.dispose();
+    } finally {
+      console.log = savedLog;
+      Object.defineProperty(globalThis, 'wavewalletdkCall', {
+        configurable: true,
+        value: savedCall,
+      });
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: savedNavigator,
+      });
+      Object.defineProperty(globalThis, 'addEventListener', {
+        configurable: true,
+        value: savedAddEventListener,
+      });
+      Object.defineProperty(globalThis, 'removeEventListener', {
+        configurable: true,
+        value: savedRemoveEventListener,
+      });
+    }
+  });
 
   // A worker whose every RPC fails, standing in for a daemon that cannot be
   // reached: neither start nor the stop that follows it is acknowledged.

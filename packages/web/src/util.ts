@@ -35,6 +35,19 @@ export function debugTs(): string {
 }
 
 /**
+ * Removes seed-bearing wallet startup values from opt-in transport debug
+ * logs. The real payload still crosses the private transport boundary.
+ */
+export function facadeDebugPayload(
+  method: string,
+  payload: unknown,
+): unknown {
+  return method === 'startExternalSeedWallet'
+    ? '[REDACTED external-seed wallet payload]'
+    : payload;
+}
+
+/**
  * Maps a non-activity event forwarded across the worker boundary onto the
  * typed {@link WavelengthEvent} union. Activity entries are normalized by the
  * client instance at the shared core boundary.

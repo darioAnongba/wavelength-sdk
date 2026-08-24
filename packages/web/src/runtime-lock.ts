@@ -1,17 +1,60 @@
 import { WavelengthError, errorMessage } from '@lightninglabs/wavelength-core';
 
 /**
- * The Web Locks name guarding the wasm runtime for this origin. The lock is
- * scoped to the whole runtime per origin, not to any single storage path,
- * because the daemon opens several exclusive OPFS SQLite stores whose paths are
- * configured independently: the wallet database under `dataDir`, the swap
- * database at its own `swapDatabaseFileName`, and paths chosen by daemon
- * defaults. Only one tab (or window) per origin can run the wallet at a time,
- * and a second tab detects that here before booting anything. Keying the lock
- * by `dataDir` alone would let two tabs that differ only in `dataDir` but share,
- * for example, the default swap database boot together and collide on it.
+ * The origin-global Web Locks name used by the legacy start lifecycle. Legacy
+ * configs can redirect individual stores outside `dataDir`, so they retain one
+ * conservative lock for the entire origin.
  */
 export const RUNTIME_LOCK_NAME = 'wavelength-web-runtime';
+
+const EXTERNAL_SEED_RUNTIME_LOCK_PREFIX =
+  'wavelength-web-runtime:external-seed-profile:';
+
+// cleanProfilePath mirrors the slash-based filepath.Clean behavior used by the
+// Go WASM runtime when it joins dataDir/data/network. It makes syntactic aliases
+// such as /wallets/a/ and /wallets/x/../a select the same Web Lock.
+function cleanProfilePath(value: string): string {
+  const absolute = value.startsWith('/');
+  const parts: string[] = [];
+  for (const part of value.split('/')) {
+    if (part === '' || part === '.') {
+      continue;
+    }
+    if (part === '..') {
+      if (parts.length > 0 && parts.at(-1) !== '..') {
+        parts.pop();
+      } else if (!absolute) {
+        parts.push(part);
+      }
+      continue;
+    }
+    parts.push(part);
+  }
+
+  const cleaned = parts.join('/');
+  if (absolute) {
+    return `/${cleaned}`;
+  }
+
+  return cleaned || '.';
+}
+
+/**
+ * Returns the non-secret Web Lock name for one external-seed storage profile.
+ * The seed entropy is deliberately absent. The final data directory and
+ * network are enough because the paired daemon confines every writable store
+ * used by this lifecycle below that network-scoped profile.
+ */
+export function externalSeedRuntimeLockName(
+  dataDir: string,
+  network: string | undefined,
+): string {
+  const profile = cleanProfilePath(
+    `${dataDir}/data/${network ?? 'mainnet'}`,
+  );
+
+  return EXTERNAL_SEED_RUNTIME_LOCK_PREFIX + encodeURIComponent(profile);
+}
 
 type LocksApi = {
   request: (
@@ -213,7 +256,7 @@ export class RuntimeLock {
    * request itself (for example while the document is shutting down), which says
    * nothing about other tabs.
    */
-  acquire(): Promise<RuntimeLockLease> {
+  acquire(name: string = RUNTIME_LOCK_NAME): Promise<RuntimeLockLease> {
     const state = this.#state;
 
     if (state.kind === 'held') {
@@ -231,7 +274,7 @@ export class RuntimeLock {
       // A release is still settling with the browser; wait it out, then acquire
       // fresh, so a retry right after a teardown does not issue its request
       // while the old lock is still held and get wallet_locked back.
-      return state.settle.then(() => this.acquire());
+      return state.settle.then(() => this.acquire(name));
     }
 
     const locks = webLocks();
@@ -243,10 +286,10 @@ export class RuntimeLock {
       return Promise.resolve(lease);
     }
 
-    return this.#request(locks);
+    return this.#request(locks, name);
   }
 
-  #request(locks: LocksApi): Promise<RuntimeLockLease> {
+  #request(locks: LocksApi, name: string): Promise<RuntimeLockLease> {
     const lease = this.#mintLease();
     let resolveLease!: (lease: RuntimeLockLease) => void;
     let rejectLease!: (err: unknown) => void;
@@ -262,7 +305,7 @@ export class RuntimeLock {
     this.#state = { kind: 'acquiring', lease, promise };
 
     const granted = locks.request(
-      RUNTIME_LOCK_NAME,
+      name,
       { ifAvailable: true },
       (lock) => {
         if (!lock) {

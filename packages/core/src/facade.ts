@@ -1,10 +1,18 @@
 import type { RuntimeConfig } from './config.ts';
-import type { CreateWalletRequest, UnlockWalletRequest } from './requests.ts';
+import type {
+  CreateWalletRequest,
+  ExternalSeedWalletRequest,
+  UnlockWalletRequest,
+} from './requests.ts';
 import { WavelengthError } from './errors.ts';
 
-/** Portable mobile and WASM facade methods available through `callFacade()`. */
+/**
+ * Portable mobile and WASM facade methods known to the SDK. Lifecycle verbs
+ * are private to typed client methods and are rejected by `callFacade()`.
+ */
 export const FACADE_METHODS = [
   'start',
+  'startExternalSeedWallet',
   'stop',
   'getInfo',
   'status',
@@ -86,6 +94,19 @@ export type MobileConfig = {
 };
 
 /**
+ * Private mobile/WASM transport envelope for the typed external-seed
+ * lifecycle. Hosts use `WavelengthClient.startExternalSeedWallet()` instead
+ * of constructing it.
+ */
+export type ExternalSeedWalletStartParams = {
+  config: MobileConfig;
+  seed_entropy: string;
+  expected_identity_pubkey?: string;
+  recover_state?: boolean;
+  recovery_window?: number;
+};
+
+/**
  * Maps the public RuntimeConfig onto the flat config the mobile facade
  * expects.
  *
@@ -144,6 +165,21 @@ export function toMobileConfig(
   return out;
 }
 
+/** Maps the typed external-seed request onto the private facade envelope. */
+export function toExternalSeedWalletStartParams(
+  config: RuntimeConfig,
+  req: ExternalSeedWalletRequest,
+  serverTransport: ServerTransport,
+): ExternalSeedWalletStartParams {
+  return {
+    config: toMobileConfig(config, serverTransport),
+    seed_entropy: base64FromBytes(req.seedEntropy),
+    expected_identity_pubkey: req.expectedIdentityPubKey,
+    recover_state: req.recoverState,
+    recovery_window: req.recoveryWindow,
+  };
+}
+
 // The base64 alphabet, indexed by 6-bit value.
 const BASE64_ALPHABET =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -177,6 +213,14 @@ export function base64FromUtf8(value: string): string {
     }
   }
 
+  return base64FromBytes(Uint8Array.from(bytes));
+}
+
+/**
+ * Encodes bytes as standard padded base64, matching Go encoding/json for a
+ * []byte field. It has no dependency on browser or Node globals.
+ */
+export function base64FromBytes(bytes: Uint8Array): string {
   let out = '';
   for (let i = 0; i < bytes.length; i += 3) {
     const b0 = bytes[i];

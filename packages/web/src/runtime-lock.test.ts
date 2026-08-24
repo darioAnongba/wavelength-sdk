@@ -4,6 +4,7 @@ import { WavelengthError } from '@lightninglabs/wavelength-core';
 import {
   RuntimeLock,
   RUNTIME_LOCK_NAME,
+  externalSeedRuntimeLockName,
   isWalletLockedMessage,
   isNearMissLockMessage,
 } from './runtime-lock.ts';
@@ -22,16 +23,17 @@ function settle(): Promise<void> {
 // grantingLocks stubs navigator.locks with a lock that is always available.
 // state.released flips true once the holder lets the grant's promise settle.
 function grantingLocks() {
-  const state = { released: false, requests: 0 };
+  const state = { released: false, requests: 0, names: [] as string[] };
   const locks = {
     request: (
-      _name: string,
+      name: string,
       _options: unknown,
       callback: (lock: LockGrant | null) => unknown,
     ) => {
       state.requests += 1;
+      state.names.push(name);
 
-      return Promise.resolve(callback({ name: RUNTIME_LOCK_NAME })).then(() => {
+      return Promise.resolve(callback({ name })).then(() => {
         state.released = true;
       });
     },
@@ -40,7 +42,42 @@ function grantingLocks() {
   return { state, navigator: { locks } };
 }
 
+describe('externalSeedRuntimeLockName', () => {
+  it('is scoped only by the final profile directory and network', () => {
+    const first = externalSeedRuntimeLockName('/wallets/account-0', 'signet');
+    assert.equal(
+      first,
+      externalSeedRuntimeLockName('/wallets/other/../account-0/', 'signet'),
+    );
+    assert.notEqual(
+      first,
+      externalSeedRuntimeLockName('/wallets/account-1', 'signet'),
+    );
+    assert.notEqual(
+      first,
+      externalSeedRuntimeLockName('/wallets/account-0', 'regtest'),
+    );
+    assert.equal(
+      externalSeedRuntimeLockName('/wallets/account-0', undefined),
+      externalSeedRuntimeLockName('/wallets/account-0', 'mainnet'),
+    );
+  });
+});
+
 describe('RuntimeLock lease semantics', () => {
+  it('requests a caller-selected lock name', async () => {
+    const locks = grantingLocks();
+    stubNavigator(locks.navigator);
+    try {
+      const lock = new RuntimeLock();
+      const lease = await lock.acquire('wavelength-profile-a');
+      assert.deepEqual(locks.state.names, ['wavelength-profile-a']);
+      await lock.releaseAndSettle(lease);
+    } finally {
+      stubNavigator(undefined);
+    }
+  });
+
   it('frees the grant only for the lease that currently owns it', async () => {
     const locks = grantingLocks();
     stubNavigator(locks.navigator);

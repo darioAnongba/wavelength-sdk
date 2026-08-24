@@ -47,11 +47,11 @@ export type SubscribeToNativeEvents = (
   listener: (event: NativeActivityEvent) => void,
 ) => () => void;
 
-  /**
+/**
  * The React Native transport: implements {@link BaseWavelengthClient}'s pipe
  * over the gomobile Turbo Module. JSON strings cross the RN bridge, then the
  * shared base client normalizes responses and streamed entries in TS.
-  */
+ */
 export class NativeWavelengthClient extends BaseWavelengthClient {
   // The embedded daemon runs natively, so it dials the servers over gRPC.
   protected readonly serverTransport = 'grpc' as const;

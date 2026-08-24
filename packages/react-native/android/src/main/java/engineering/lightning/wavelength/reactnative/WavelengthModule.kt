@@ -157,6 +157,8 @@ class WavelengthModule(reactContext: ReactApplicationContext) :
     val params = paramsJson.toByteArray(Charsets.UTF_8)
     return when (method) {
       "start" -> { Mobile.start(paramsJson); "" }
+      "startExternalSeedWallet" ->
+        Mobile.startExternalSeedWallet(params).toString(Charsets.UTF_8)
       "stop" -> { Mobile.stop(); "" }
       "getInfo" -> Mobile.getInfo().toString(Charsets.UTF_8)
       "status" -> Mobile.status().toString(Charsets.UTF_8)

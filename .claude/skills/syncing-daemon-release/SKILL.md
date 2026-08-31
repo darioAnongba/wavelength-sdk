@@ -49,7 +49,7 @@ cd <daemon checkout> && git worktree remove --force /tmp/wavelength-<version>
 | Wasm runtime build | `wasm:local` (step 5) | Bump the pin first |
 | Runtime asset FILE LIST | Nothing | Three places in lockstep: `packages/web/src/runtime-manifest.ts` (`RUNTIME_ASSET_FILES`, and in the same file, generated: `RUNTIME_ASSET_DIGESTS`), `apps/web-wallet-demo/scripts/wasm-local.sh`, `apps/web-wallet-demo/scripts/fetch-runtime-assets.sh`. A fourth lives upstream in wavelength's `mobile-bindings.yml`: its "Package browser WASM runtime" step lists the files packed into the release archive, so diff that step's list against the three local copies |
 | Gomobile mobile bindings build | `bindings:local` (step 5) | Bump the pin first. Mirrors the wasm row: build from `$WAVELENGTH_DIR`, since the pin is often not downloadable yet. `bindings:fetch` works only once it names a published release |
-| Gomobile facade (`sdk/wavewalletdk/mobile`) | Nothing | Native SDK docs checkpoint (below) |
+| Gomobile facade (`sdk/wavewalletdk/mobile`) | Nothing | Native SDK docs checkpoint (below), AND both shipped transports. This package is NOT native-only: `cmd/wavewalletdk-wasm` builds with `-tags "mobile ..."` and dispatches every verb through it, so a change upstream calls mobile-only (a per-call deadline, a new request field, a stable error prefix) lands on the WEB transport too. Read the facade diff for behavior changes, not just types, and check whether a new request field is reachable from `packages/core`'s request types |
 
 ## RPC checklist
 
@@ -128,8 +128,15 @@ export WAVELENGTH_DIR=/absolute/path/to/wavelength   # a worktree at the
    `Wavewalletdk.wasm.tar.gz` from the release named by the pin. That archive
    lands on a DRAFT release and draft assets are not publicly downloadable, so
    a tag-shaped pin that `runtime-pin` still rejects usually means the release
-   is unpublished, not that the pin is wrong. The RN transport's mobile
-   bindings key off the same pin and need the same treatment: restage them with
+   is unpublished, not that the pin is wrong. The other cause is a PUBLISHED
+   release whose asset build failed: the binding assets are attached by a
+   separate workflow, so `wasm:fetch` and `bindings:fetch` 404 while every
+   other release asset is present. Before assuming a draft, list the assets and
+   check that workflow's run on the tag (`gh run list --repo
+   lightninglabs/wavelength --workflow mobile-bindings.yml`). A failed run is
+   fixed upstream by re-running the job, not worked around here. The RN
+   transport's mobile bindings key off the same pin and need the same
+   treatment: restage them with
    `pnpm --filter @lightninglabs/wavelength-react-native run bindings:local`,
    which builds the `.aar` and the `.xcframework` from the same
    `$WAVELENGTH_DIR` worktree (pass `android` or `ios` to build one platform;
@@ -220,9 +227,10 @@ they never block a sync. After the main sync:
    resolve. Three pages, and the quickstart's snippets are the only code.
 2. If `sdk/wavewalletdk/mobile` changed in the range
    (`git -C $WAVELENGTH_DIR diff --stat <pin>..<target> -- sdk/wavewalletdk/mobile`)
-   but wavelength-mobile has not adopted it yet, file a `.tasks/` follow-up and
-   finish the sync. The pages stay truthful meanwhile, since they describe the
-   published wrapper and link out for volatile detail.
+   but wavelength-mobile has not adopted it yet, raise the follow-up with the
+   user (this repo has no tracked TODO directory, so there is nowhere to file
+   it silently) and finish the sync. The pages stay truthful meanwhile, since
+   they describe the published wrapper and link out for volatile detail.
 
 ## Common mistakes
 

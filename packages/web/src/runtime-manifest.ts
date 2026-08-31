@@ -46,8 +46,8 @@ export const RUNTIME_ASSET_FILES: readonly string[] =
  */
 export const RUNTIME_ASSET_DIGESTS: Readonly<Record<string, string>> =
   Object.freeze({
-    'wavewalletdk.wasm': 'sha256-BVk5wduDtkThxQJec/RhnrRdG14hn4zG1kVaY62yhls=',
-    'wavewalletdk.wasm.gz': 'sha256-NmiIa5OzYSJDPXDgBojihKgZipkart5I6C8I+VL/rb4=',
+    'wavewalletdk.wasm': 'sha256-l5rqakw/MGXayFeTxy0kycHrKBkeoczjy8yhHQEhV/A=',
+    'wavewalletdk.wasm.gz': 'sha256-UMb2qdVT0XcYKr+HCvmQ8xbyVTyjTNYSb9sc+3/jVNs=',
     'wasm_exec.js': 'sha256-DJSfSZb5qJaY5LXFht4yJJw7abe6rbZNIgBzzASsuhQ=',
     'sqlite-bridge.js': 'sha256-kpX8OUkepu51hzYlkgpOCPXzo+LARvUM3nkSveZSXRs=',
     'sqlite-worker.js': 'sha256-0n/tQALRgOug0J4lxN5u2tlZPV7DOffcfN8dUa1L77M=',

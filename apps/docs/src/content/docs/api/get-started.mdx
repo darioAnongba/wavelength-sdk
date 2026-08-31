@@ -7,9 +7,11 @@ import Callout from '~/components/mdx/Callout.astro';
 
 ## Build waved with the wallet API
 
-`WalletService` and `WalletInspectionService` are compiled into `waved` only when the daemon is built with both the `wavewalletrpc` and `swapruntime` build tags. With `wavewalletrpc` but not `swapruntime`, the build still succeeds but a stub takes over and the wallet API is silently omitted, producing the same `Unimplemented` symptom as a default build. A default `make build` includes neither tag, so the wallet API is off unless you opt in.
+`WalletService` and `WalletInspectionService` are compiled into `waved` only when the daemon is built with both the `wavewalletrpc` and `swapruntime` build tags. With `wavewalletrpc` but not `swapruntime`, the build still succeeds but a stub takes over and the wallet API is silently omitted, producing the same `Unimplemented` symptom as a default source build.
 
-Build both `waved` and `wavecli` with the tag using the provided make target:
+The prebuilt binaries attached to a wavelength release carry both tags as of `v0.1.2-rc4`, so the `waved` in any per-platform archive (`wavelength-<os>-<arch>-<version>`, a `.tar.gz` except for the Windows `.zip`) already serves the wallet API. Building from source is the case that needs opting in, including from the release's own source archive: a default `make build` includes neither tag.
+
+Build both `waved` and `wavecli` with the tags using the provided make target:
 
 ```bash title="Terminal"
 make build-wavewalletrpc
@@ -17,8 +19,8 @@ make build-wavewalletrpc
 
 This produces `bin/waved` and `bin/wavecli` with the wallet RPC surface registered. `make install-wavewalletrpc` does the same via `go install`, landing the binaries in `$GOPATH/bin`.
 
-<Callout type="note" title="Default builds omit the API">
-Without the `wavewalletrpc` tag, `WalletService` and `WalletInspectionService` are compiled out entirely and never registered. A call against a default build fails with gRPC's standard unknown-service error, which surfaces as the `Unimplemented` status code. If a call fails that way, rebuild with `make build-wavewalletrpc`.
+<Callout type="note" title="Default source builds omit the API">
+Without the `wavewalletrpc` tag, `WalletService` and `WalletInspectionService` are compiled out entirely and never registered. A call against such a build fails with gRPC's standard unknown-service error, which surfaces as the `Unimplemented` status code. If a call fails that way, rebuild with `make build-wavewalletrpc`.
 </Callout>
 
 ## Endpoints

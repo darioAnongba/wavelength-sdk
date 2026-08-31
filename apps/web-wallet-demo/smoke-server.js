@@ -75,15 +75,75 @@ function enqueueMailbox(mailboxID, envelope) {
   mailboxQueues.set(mailboxID, queue);
 }
 
-function queueIndexerResponse(envelope) {
+// arkInfo is the operator's GetInfo payload. The daemon reaches GetInfo two
+// ways (plain REST, and as a mailbox RPC once the connector is up); both read
+// this object at request time rather than snapshotting it at module load. The
+// mailbox copy is taken when the send arrives and held until the pull, so a
+// field made dynamic here can still read differently on the two paths.
+const arkInfo = {
+  version: "playwright",
+  pubkey: operatorPubkey,
+  network: "regtest",
+  // The client negotiates an Ark protocol version on bootstrap and aborts
+  // wallet-ready services unless the operator echoes back a non-zero
+  // selected_ark_version it supports (the client supports [1]).
+  selected_ark_version: 1,
+  block_height: 0,
+  boarding_exit_delay: 1,
+  vtxo_exit_delay: 1,
+  sweep_key: operatorPubkey,
+  sweep_delay: 2,
+  dust_limit: "330",
+  min_boarding_amount: "1000",
+  max_boarding_amount: "0",
+  fee_rate: "1",
+  min_confirmations: 0,
+  min_operator_fee: "0",
+  max_oor_lineage_vbytes: 0,
+};
+
+// mailboxResponses maps a mailbox RPC to a function building the response body
+// the operator would return, so each body is built when the request arrives
+// rather than fixed at module load. Every request the daemon sends over the
+// mailbox needs an entry: a miss does not fail fast, it blocks until whichever
+// caller sent that request hits its own deadline, so it reads as an
+// unexplained stall rather than an obviously missing mock. There is no single
+// bound; it depends on the call path (30s for the daemon's authenticated
+// startup GetInfo, 20s for a browser receive, otherwise the mailbox registry's
+// 10-minute waiter TTL), and the short ones surface as a confusing
+// DeadlineExceeded far from the cause. queueMailboxResponse logs every miss so
+// the cause stays visible.
+const mailboxResponses = {
+  "arkrpc.IndexerService/RegisterReceiveScript": () => ({
+    "@type": "type.googleapis.com/arkrpc.RegisterReceiveScriptResponse",
+  }),
+  "arkrpc.ArkService/GetInfo": () => ({
+    "@type": "type.googleapis.com/arkrpc.GetInfoResponse",
+    ...arkInfo,
+  }),
+};
+
+function queueMailboxResponse(envelope) {
   const rpc = envelope?.rpc;
-  if (
-    rpc?.kind !== "KIND_REQUEST" ||
-    rpc?.service !== "arkrpc.IndexerService" ||
-    rpc?.method !== "RegisterReceiveScript"
-  ) {
+  if (rpc?.kind !== "KIND_REQUEST") {
     return;
   }
+
+  const rpcName = `${rpc.service}/${rpc.method}`;
+  const buildBody = mailboxResponses[rpcName];
+  if (!buildBody) {
+    // Logged unconditionally rather than behind WAVELENGTH_SMOKE_VERBOSE: the
+    // request dropped here is the one that stalls the test later, and the
+    // HTTP-level logging only ever shows the /v1/mailbox/send path.
+    console.warn(
+      `smoke-server: no mailboxResponses entry for ${rpcName}, ` +
+        "leaving the daemon's request unanswered.",
+    );
+
+    return;
+  }
+
+  const body = buildBody();
 
   enqueueMailbox(rpc.reply_to, {
     protocol_version: envelope.protocol_version || 1,
@@ -95,10 +155,7 @@ function queueIndexerResponse(envelope) {
     expires_at_unix_ms: String(Date.now() + 60 * 1000),
     type: "mailboxrpc.response",
     headers: {},
-    body: {
-      "@type":
-        "type.googleapis.com/arkrpc.RegisterReceiveScriptResponse",
-    },
+    body,
     rpc: {
       kind: "KIND_RESPONSE",
       service: rpc.service,
@@ -156,27 +213,7 @@ async function serveAPI(req, res, urlPath) {
   }
 
   if (apiPath === "/v1/ark/get-info") {
-    json(res, {
-      version: "playwright",
-      pubkey: operatorPubkey,
-      network: "regtest",
-      // The client negotiates an Ark protocol version on bootstrap and aborts
-      // wallet-ready services unless the operator echoes back a non-zero
-      // selected_ark_version it supports (the client supports [1]).
-      selected_ark_version: 1,
-      block_height: 0,
-      boarding_exit_delay: 1,
-      vtxo_exit_delay: 1,
-      sweep_key: operatorPubkey,
-      sweep_delay: 2,
-      dust_limit: "330",
-      min_boarding_amount: "1000",
-      max_boarding_amount: "0",
-      fee_rate: "1",
-      min_confirmations: 0,
-      min_operator_fee: "0",
-      max_oor_lineage_vbytes: 0,
-    });
+    json(res, arkInfo);
 
     return true;
   }
@@ -212,7 +249,7 @@ async function serveAPI(req, res, urlPath) {
 
   if (apiPath === "/v1/mailbox/send") {
     const body = await readJSON(req);
-    queueIndexerResponse(body.envelope);
+    queueMailboxResponse(body.envelope);
     json(res, { status: { ok: true } });
 
     return true;

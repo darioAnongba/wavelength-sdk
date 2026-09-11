@@ -120,6 +120,13 @@ export type RuntimeConfig = {
    */
   maxOperatorFeeSat?: number;
   /**
+   * Largest total Lightning payment CLTV, in blocks, reserved by automatic
+   * VTXO maintenance. Omit it to use the daemon default. The mobile facade
+   * distinguishes an explicit zero from omission and uses zero to disable the
+   * reserve. Must be a nonnegative safe integer that fits in an int32.
+   */
+  maxPaymentCLTV?: number;
+  /**
    * Maximum concurrent VTXO signing sessions. Zero selects the wallet-backend
    * default and one forces serial signing.
    */
@@ -142,6 +149,7 @@ const numericFields = [
   'walletPollIntervalSeconds',
   'walletRecoveryWindow',
   'maxOperatorFeeSat',
+  'maxPaymentCLTV',
   'signingWorkers',
   'bufferSize',
 ] as const;
@@ -189,6 +197,12 @@ export function validateRuntimeConfig(
     config.walletRecoveryWindow > 0xffff_ffff
   ) {
     invalidConfig('walletRecoveryWindow must fit in uint32');
+  }
+  if (
+    config.maxPaymentCLTV !== undefined &&
+    config.maxPaymentCLTV > 0x7fff_ffff
+  ) {
+    invalidConfig('maxPaymentCLTV must fit in int32');
   }
   if (transport === 'rest' && config.arkServerTlsCertPath !== undefined) {
     invalidConfig('arkServerTlsCertPath is unavailable on the web transport');

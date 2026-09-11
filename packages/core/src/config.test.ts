@@ -65,6 +65,7 @@ describe('validateRuntimeConfig', () => {
     ['fractional buffer', { bufferSize: 1.5 }, 'grpc'],
     ['negative workers', { signingWorkers: -1 }, 'grpc'],
     ['unsafe fee', { maxOperatorFeeSat: Number.MAX_SAFE_INTEGER + 1 }, 'grpc'],
+    ['int32 CLTV overflow', { maxPaymentCLTV: 0x8000_0000 }, 'grpc'],
     [
       'uint32 recovery overflow',
       { walletRecoveryWindow: 0x1_0000_0000 },
@@ -88,6 +89,7 @@ describe('validateRuntimeConfig', () => {
           walletPollIntervalSeconds: 0,
           walletRecoveryWindow: 0,
           maxOperatorFeeSat: 0,
+          maxPaymentCLTV: 0,
           signingWorkers: 0,
           bufferSize: 0,
         },

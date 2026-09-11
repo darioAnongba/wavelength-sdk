@@ -1,0 +1,44 @@
+---
+title: bakemacaroon
+description: Create a daemon macaroon with scoped entity/action or exact RPC permissions.
+---
+
+`bakemacaroon` creates a daemon credential limited to the permissions you name.
+Pass one or more `entity:action` values, or use the special `uri` entity with a
+full registered RPC method path to grant one exact method.
+
+You don't need to grant a whole service. For example,
+`uri:/waverpc.DaemonService/GetInfo` grants only `GetInfo`. Run `wavecli dev`
+to inspect the fully qualified service names and their methods. Form an exact
+URI as `/<fully-qualified-service>/<method>`.
+
+## Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--save-to` | (none) | Save the binary macaroon to a new file at this path. The command refuses to replace an existing file or symlink. |
+| `--root-key-id` | `0` | Numeric macaroon root key ID. Zero uses the daemon default. |
+| `--valid-for` | `0` | Add a client-side expiry in seconds. Zero means no expiry. |
+
+The command also accepts the global connection flags. With `--request-json`,
+put `permissions` and `rootKeyId` in the JSON request instead of passing
+positional permissions or `--root-key-id`. `--save-to` and `--valid-for` still
+apply to the returned macaroon.
+
+Without `--save-to`, stdout contains the hex-encoded macaroon in a `macaroon`
+field. With `--save-to`, the binary credential is written with private file
+permissions and stdout contains only its `path`, keeping the credential out of
+terminal history and captured output.
+
+## Example
+
+Create a credential that can call only `GetInfo` and save it to a file:
+
+```bash title="Terminal"
+wavecli bakemacaroon \
+  uri:/waverpc.DaemonService/GetInfo \
+  --valid-for 3600 \
+  --save-to ./getinfo.macaroon
+```
+
+Calls the daemon `MacaroonService.BakeMacaroon` RPC.

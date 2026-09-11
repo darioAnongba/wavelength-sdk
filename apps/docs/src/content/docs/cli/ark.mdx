@@ -34,12 +34,15 @@ VTXO inventory and lifecycle: `list`, `refresh`, `leave`.
 
 ### `vtxos list`
 
-Returns VTXOs known to the wallet, optionally filtered by status and minimum
-amount.
+Returns VTXOs known to the wallet, newest first. By default it excludes
+`forfeited`, `spent`, and `pending_round`. Repeat `--status` to request one or
+more statuses, including `pending_round`, or pass `--all` to include every
+status.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--status` | (none) | Filter by status: live, pending_forfeit, forfeiting, forfeited, spent, unilateral_exit, failed, spending. |
+| `--status` | (none) | Filter by status; repeatable. Values: live, pending_forfeit, forfeiting, forfeited, spent, unilateral_exit, failed, spending, pending_round, expired. Mutually exclusive with `--all`. |
+| `--all` | `false` | List every status. OOR checkpoint PSBTs are omitted unless `--fields` includes `oor_final_checkpoint_psbts`. |
 | `--min-amount` | `0` | Minimum amount in sats. |
 | `--fields` | (none) | Comma-separated field names to include in the response. |
 | `--ndjson` | `false` | Emit one JSON object per VTXO, newline-delimited. |
@@ -242,17 +245,18 @@ wavecli ark oor list --direction incoming
 
 ### `oor receive`
 
-Allocates a fresh wallet key, registers the matching taproot receive script
-with the indexer, and prints the resulting destination details.
+Allocates and registers a taproot receive script, or returns the exact existing
+allocation when an idempotency key is replayed.
 
 | Flag | Default | Description |
 |---|---|---|
 | `--label` | (none) | Optional label stored with the receive-script registration. |
+| `--idempotency-key` | (none) | Retry key that returns the same receive script. |
 
 Calls the daemon `NewReceiveScript` RPC.
 
 ```bash title="Terminal"
-wavecli ark oor receive --label "invoice-42"
+wavecli ark oor receive --label "invoice-42" --idempotency-key invoice-42
 ```
 
 ## `board`

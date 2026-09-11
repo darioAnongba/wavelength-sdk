@@ -57,6 +57,7 @@ describe('toMobileConfig', () => {
           swapServerInsecure: true,
           swapDatabaseFileName: 'swaps.db',
           maxOperatorFeeSat: 100,
+          maxPaymentCLTV: 300,
           signingWorkers: 4,
           bufferSize: 64,
         },
@@ -83,6 +84,7 @@ describe('toMobileConfig', () => {
         swap_server_insecure: true,
         swap_database_file_name: 'swaps.db',
         max_operator_fee_sat: 100,
+        max_payment_cltv: 300,
         signing_workers: 4,
         buffer_size: 64,
       },
@@ -102,6 +104,15 @@ describe('toMobileConfig', () => {
     assert.equal(out.wallet_esplora_url, 'https://esplora.example/api');
     assert.equal(out.wallet_password_file, '/secrets/wallet.pass');
     assert.equal(out.wallet_poll_interval_seconds, 15);
+  });
+
+  it('preserves an explicit zero maxPaymentCLTV and omits an unset value', () => {
+    const disabled = toMobileConfig({ maxPaymentCLTV: 0 }, 'grpc');
+    assert.equal(disabled.max_payment_cltv, 0);
+    assert.equal(Object.hasOwn(disabled, 'max_payment_cltv'), true);
+
+    const defaulted = toMobileConfig({}, 'grpc');
+    assert.equal(Object.hasOwn(defaulted, 'max_payment_cltv'), false);
   });
 
   it('omits every swap field when swaps are disabled', () => {

@@ -176,10 +176,15 @@ export WAVELENGTH_DIR=/absolute/path/to/wavelength   # a worktree at the
    `## Demo apps` headings (plus `## Maintenance` for repo plumbing), one
    bullet per merged PR in the GitHub auto-notes style:
    `* <concise change> by @<author> in <PR URL>`. Source the PR list from
-   the auto-generated notes (gh api releases/generate-notes) so nothing
-   merged since the last tag is missed; a PR whose content spans sections
-   (e.g. a sync PR carrying both the pin and CLI docs) may appear once per
-   section. End with the auto-notes' **Full Changelog** compare link.
+   the auto-generated notes (gh api releases/generate-notes) so nothing is
+   missed. For a stable (non-prerelease) release, pass the previous stable SDK
+   tag as `previous_tag_name`, skipping intervening prerelease tags. Its notes
+   and **Full Changelog** are cumulative across the whole release cycle (for
+   example, `v0.1.1...v0.1.2`, not `v0.1.2-rc4...v0.1.2`). An RC compares
+   against the immediately preceding published SDK tag. A PR whose content
+   spans sections (e.g. a sync PR carrying both the pin and CLI docs) may
+   appear once per section. End with the auto-notes' **Full Changelog** compare
+   link using the same base tag.
 
 ## Verification ladder (run in this order)
 

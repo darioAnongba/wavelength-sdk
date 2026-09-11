@@ -71,6 +71,7 @@ export const runtimeConfigSig = `type RuntimeConfig = {
   swapDatabaseFileName?: string;
   disableSwaps?: boolean;
   maxOperatorFeeSat?: number;
+  maxPaymentCLTV?: number;
   signingWorkers?: number;
   bufferSize?: number;
 };`;
@@ -100,6 +101,7 @@ export const mobileConfigSig = `type MobileConfig = {
   swap_server_insecure?: boolean;
   swap_database_file_name?: string;
   max_operator_fee_sat?: number;
+  max_payment_cltv?: number;
   signing_workers?: number;
   buffer_size?: number;
 };`;
@@ -161,6 +163,7 @@ const config: RuntimeConfig = {
   walletFilterHeadersSource: 'neutrino',
   walletRecoveryWindow: 250,
   maxOperatorFeeSat: 100,
+  maxPaymentCLTV: 300,
   signingWorkers: 4,
   bufferSize: 64,
 };
@@ -188,6 +191,7 @@ const config: RuntimeConfig = {
   { name: 'swapDatabaseFileName', type: 'string', desc: 'Daemon-owned SQLite file for swap state.' },
   { name: 'disableSwaps', type: 'boolean', desc: 'Disables Lightning swaps and suppresses preset and override swap fields.' },
   { name: 'maxOperatorFeeSat', type: 'number', desc: 'Maximum operator fee in satoshis. Must be a nonnegative safe integer.' },
+  { name: 'maxPaymentCLTV', type: 'number', desc: 'Largest total Lightning payment CLTV, in blocks, reserved by automatic VTXO maintenance. Omit it to use the daemon default. The mobile facade distinguishes an explicit zero from omission and uses zero to disable the reserve. Must be a nonnegative safe integer that fits in int32.' },
   { name: 'signingWorkers', type: 'number', desc: 'Signing worker count. Must be a nonnegative safe integer.' },
   { name: 'bufferSize', type: 'number', desc: 'Runtime buffer size. Must be a nonnegative safe integer.' },
 ]} />
@@ -468,15 +472,6 @@ transport redacts the whole startup request and result from opt-in debug logs.
 `identityPubKey` is the non-secret identity to persist for a later
 `expectedIdentityPubKey` check. The remaining fields report whether recovery
 ran and what it found. The result contains no seed material.
-
-<Callout type="caution" title="Requires the paired unreleased daemon">
-This source API depends on
-[lightninglabs/wavelength#1158](https://github.com/lightninglabs/wavelength/pull/1158).
-It is absent from the currently pinned v0.1.1 WASM and gomobile artifacts.
-Until a newer Wavelength release is published and this SDK advances its
-runtime pin, use runtime assets or native bindings built from the paired
-Wavelength branch.
-</Callout>
 
 </ApiSymbol>
 

@@ -137,14 +137,6 @@ this package. Persist the returned `identityPubKey` and supply it as
 `expectedIdentityPubKey` on later opens if the app wants to bind a selected
 folder to the expected wallet identity.
 
-<Callout type="caution" title="Requires local paired bindings">
-This source API depends on
-[lightninglabs/wavelength#1158](https://github.com/lightninglabs/wavelength/pull/1158)
-and is absent from the currently pinned v0.1.1 AAR and XCFramework. Until a
-newer Wavelength release is pinned, build bindings locally from the paired
-Wavelength branch.
-</Callout>
-
 <ApiSymbol name="createNativeWalletEngine" kind="function">
 
 Creates a [`WalletEngine`](/reference/wavelength-core/#WalletEngine) over the React Native transport: the one-call setup for an RN app. It builds the client with `createNativeClient()` internally, so you only need this one factory. Pass the result to `WavelengthProvider` from [wavelength-react](/reference/wavelength-react/).

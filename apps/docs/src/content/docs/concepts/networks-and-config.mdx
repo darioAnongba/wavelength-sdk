@@ -113,6 +113,7 @@ const config: RuntimeConfig = {
   walletFilterHeadersSource: 'https://headers.example.com/filter-headers.bin',
   walletRecoveryWindow: 250,
   maxOperatorFeeSat: 100,
+  maxPaymentCLTV: 300,
   signingWorkers: 4,
   bufferSize: 64,
 };
@@ -132,8 +133,13 @@ const config: RuntimeConfig = {
   which suppresses every swap field.
 - `disableSwaps: true` disables Lightning swaps and suppresses both preset and
   override swap fields.
-- `maxOperatorFeeSat`, `signingWorkers`, and `bufferSize` are numeric runtime
-  limits. They must be nonnegative safe integers.
+- `maxOperatorFeeSat`, `maxPaymentCLTV`, `signingWorkers`, and `bufferSize` are
+  numeric runtime limits. They must be nonnegative safe integers.
+- `maxPaymentCLTV` is the largest total Lightning payment CLTV, in blocks,
+  that automatic VTXO maintenance reserves. Leave it unset to use the daemon
+  default. The mobile facade distinguishes an explicit `0` from an omitted
+  value and uses it to disable the extra reserve. The value must also fit in a
+  signed 32-bit integer.
 
 ### Embedded wallet backend fields
 

@@ -89,6 +89,7 @@ export type MobileConfig = {
   swap_server_insecure?: boolean;
   swap_database_file_name?: string;
   max_operator_fee_sat?: number;
+  max_payment_cltv?: number;
   signing_workers?: number;
   buffer_size?: number;
 };
@@ -142,6 +143,9 @@ export function toMobileConfig(
     wallet_block_headers_source: config.walletBlockHeadersSource,
     wallet_filter_headers_source: config.walletFilterHeadersSource,
     max_operator_fee_sat: config.maxOperatorFeeSat,
+    // Keep an explicit zero. The mobile facade distinguishes it from omission
+    // and converts it to WithMaxPaymentCLTVDisabled during Start.
+    max_payment_cltv: config.maxPaymentCLTV,
     signing_workers: config.signingWorkers,
     buffer_size: config.bufferSize,
   };

@@ -106,6 +106,15 @@ describe('toMobileConfig', () => {
     assert.equal(out.wallet_poll_interval_seconds, 15);
   });
 
+  it('preserves an explicit zero maxPaymentCLTV and omits an unset value', () => {
+    const disabled = toMobileConfig({ maxPaymentCLTV: 0 }, 'grpc');
+    assert.equal(disabled.max_payment_cltv, 0);
+    assert.equal(Object.hasOwn(disabled, 'max_payment_cltv'), true);
+
+    const defaulted = toMobileConfig({}, 'grpc');
+    assert.equal(Object.hasOwn(defaulted, 'max_payment_cltv'), false);
+  });
+
   it('omits every swap field when swaps are disabled', () => {
     const out = toMobileConfig(
       {

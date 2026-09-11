@@ -230,6 +230,7 @@ export const CLI_NAV: NavGroup[] = [
     section: 'cli-daemon',
     items: [
       { slug: 'cli/getinfo', label: 'getinfo', section: 'cli-daemon' },
+      { slug: 'cli/bakemacaroon', label: 'bakemacaroon', section: 'cli-daemon' },
       { slug: 'cli/schema', label: 'schema', section: 'cli-daemon' },
       { slug: 'cli/mcp', label: 'mcp', section: 'cli-daemon' },
     ],

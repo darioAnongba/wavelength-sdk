@@ -31,12 +31,16 @@ configured with a set of persistent flags, available on every command:
 | `--timeout` | `30s` | Maximum duration for each daemon RPC. `0` disables the deadline. |
 | `--json` | `false` | Emit machine-readable JSON output. A shorthand for `--format json` on commands with a `--format` selector. |
 | `--no-input` | `false` | Never prompt or implicitly consume stdin. Setting the `CI=true` environment variable has the same prompt-suppression effect. |
-| `--request-json` | (none) | Raw JSON request payload that maps directly to the RPC request proto. When set, the command's bespoke flags are ignored. |
+| `--request-json` | (none) | Raw JSON request payload that maps directly to the RPC request proto. When set, it supplies the complete RPC request. Do not combine it with command-specific request inputs; command-local output and post-processing flags may still apply. |
 
 The `--request-json` flag is the raw-request escape hatch: pass a JSON object
 shaped like the method's request proto and it is sent verbatim, so an agent can
-drive any command from a single serialized payload instead of assembling flags.
-It is distinct from the `--json` output selector.
+drive the RPC request from a single serialized payload instead of assembling
+request flags. Do not combine it with command-specific request inputs. For
+example, `bakemacaroon` rejects positional permissions and `--root-key-id`
+when `--request-json` is set, while output and post-processing flags such as
+`--save-to` and `--valid-for` still apply to the returned macaroon.
+`--request-json` is distinct from the `--json` output selector.
 
 Flags are spelled in kebab-case, but every flag also accepts the snake_case
 spelling of the same name (`--max_fee` resolves to `--max-fee`), so a name
@@ -133,6 +137,7 @@ Introspection and integration surfaces that live at the root.
 | Command | What it does |
 |---|---|
 | [`getinfo`](/cli/getinfo/) | Display daemon status information. |
+| [`bakemacaroon`](/cli/bakemacaroon/) | Create a daemon macaroon with scoped permissions. |
 | [`schema`](/cli/schema/) | Dump machine-readable method schemas as JSON. |
 | [`mcp`](/cli/mcp/) | Run a Model Context Protocol server over stdio. |
 

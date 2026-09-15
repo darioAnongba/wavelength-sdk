@@ -1,3 +1,4 @@
+import { useId, useState } from "react";
 import {
   Activity,
   ArrowDownLeft,
@@ -5,11 +6,16 @@ import {
   Layers,
   LogOut,
   type LucideIcon,
+  QrCode,
+  Zap,
 } from "lucide-react";
 import { Entry } from "@lightninglabs/wavelength-react";
 import { cn } from "../lib/cn";
 import { formatSats, formatTimestamp, shortKey } from "../lib/format";
+import { GhostButton } from "./ui/Button";
 import { CopyRow } from "./ui/CopyRow";
+import { FauxQR } from "./ui/FauxQR";
+import { Modal } from "./ui/Modal";
 
 const KIND_ICON: Record<string, LucideIcon> = {
   receive: ArrowDownLeft,
@@ -78,6 +84,8 @@ export function ActivityRow({ entry }: { entry: Entry }) {
     (cooperativeSend ? "Sent" : KIND_LABEL[entry.kind]) ||
     entry.kind;
   const time = formatTimestamp(entry.createdAt);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const invoiceTitleId = useId();
   const phase = pending
     ? phaseHint(entry.progress?.phaseLabel, title, entry.counterparty)
     : "";
@@ -108,11 +116,24 @@ export function ActivityRow({ entry }: { entry: Entry }) {
             <div className="truncate text-xs text-muted">{phase}</div>
           ) : null}
         </div>
-        <div className="hidden sm:block">
+        {invoice ? (
+          <button
+            type="button"
+            onClick={() => setInvoiceOpen(true)}
+            aria-label="Show invoice"
+            className="inline-flex h-6 shrink-0 items-center gap-1.5 border
+              border-border px-2 text-xs font-medium text-muted
+              transition-colors hover:border-border-strong hover:text-fg"
+          >
+            <QrCode size={13} />
+            <span className="hidden sm:inline">Invoice</span>
+          </button>
+        ) : null}
+        <div className="hidden sm:flex">
           <span
             className={cn(
-              `border px-2 py-0.5 text-[10px] font-medium uppercase
-              tracking-wide`,
+              `inline-flex h-6 items-center border px-2 text-[10px]
+              font-medium uppercase tracking-wide`,
               STATUS_CLASS[entry.status] ?? "border-border text-muted",
             )}
           >
@@ -137,17 +158,72 @@ export function ActivityRow({ entry }: { entry: Entry }) {
         </div>
       </div>
       {invoice ? (
-        <details className="mt-2 min-w-0">
-          <summary
-            className="cursor-pointer text-xs font-medium text-accent"
-          >
-            View invoice
-          </summary>
-          <div className="mt-3">
-            <CopyRow label="Invoice" value={invoice} />
-          </div>
-        </details>
+        <Modal
+          open={invoiceOpen}
+          onClose={() => setInvoiceOpen(false)}
+          labelledBy={invoiceTitleId}
+        >
+          <InvoiceDialogBody
+            titleId={invoiceTitleId}
+            invoice={invoice}
+            amountSat={entry.amountSat ?? 0}
+            onClose={() => setInvoiceOpen(false)}
+          />
+        </Modal>
       ) : null}
+    </div>
+  );
+}
+
+// InvoiceDialogBody re-presents a pending Lightning receive the way the Receive
+// screen first showed it (amount, QR, copyable invoice), so a payer can still
+// be handed the request after the user has navigated away.
+function InvoiceDialogBody({
+  titleId,
+  invoice,
+  amountSat,
+  onClose,
+}: {
+  titleId: string;
+  invoice: string;
+  amountSat: number;
+  onClose: () => void;
+}) {
+  return (
+    <div data-testid="invoice-dialog">
+      <div className="flex items-start gap-3">
+        <div
+          className="flex h-9 w-9 shrink-0 items-center justify-center
+            bg-sky/15 text-sky"
+        >
+          <Zap size={18} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="text-base font-semibold text-fg">
+            Lightning invoice
+          </h2>
+          <p className="mt-0.5 text-xs text-muted">Waiting for payment</p>
+        </div>
+        <div className="text-right font-mono text-base font-medium tabular-nums text-fg">
+          {formatSats(Math.abs(amountSat))}
+          <span className="ml-1 text-xs text-muted">sats</span>
+        </div>
+      </div>
+
+      <div className="mt-5 flex flex-col items-center gap-2">
+        <div className="bg-white p-3">
+          <FauxQR seed={invoice} size={23} color="#0a0a0b" className="h-40 w-40" />
+        </div>
+        <span className="text-xs text-faint">This is not a real QR code</span>
+      </div>
+
+      <div className="mt-5">
+        <CopyRow label="Invoice" value={invoice} />
+      </div>
+
+      <div className="mt-6">
+        <GhostButton onClick={onClose}>Close</GhostButton>
+      </div>
     </div>
   );
 }

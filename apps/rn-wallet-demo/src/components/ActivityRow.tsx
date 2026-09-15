@@ -1,4 +1,5 @@
-import { Text, View } from 'react-native';
+import { useState } from 'react';
+import { Modal, Pressable, Text, View } from 'react-native';
 import {
   Activity,
   ArrowDownLeft,
@@ -6,12 +7,17 @@ import {
   Layers,
   LogOut,
   type LucideIcon,
+  QrCode,
+  Zap,
 } from 'lucide-react-native';
 import { Entry } from '@lightninglabs/wavelength-react';
 import { formatSats, formatTimestamp, shortKey } from '../lib/format';
 import { Palette, fonts } from '../theme/tokens';
 import { useTheme } from '../theme/ThemeProvider';
 import { useThemedStyles } from '../theme/useThemedStyles';
+import { GhostButton } from './ui/Button';
+import { CopyRow } from './ui/CopyRow';
+import { QRCode } from './ui/QRCode';
 
 const KIND_ICON: Record<string, LucideIcon> = {
   receive: ArrowDownLeft,
@@ -82,12 +88,33 @@ const makeStyles = (p: Palette) => ({
     fontSize: 11,
     marginTop: 2,
   },
-  status: {
-    alignSelf: 'flex-start' as const,
-    borderWidth: 1,
+  // The status pill and the invoice button share one fixed height so they
+  // line up when shown side by side.
+  chips: {
+    alignItems: 'center' as const,
+    flexDirection: 'row' as const,
+    gap: 6,
     marginTop: 4,
+  },
+  status: {
+    borderWidth: 1,
+    height: 22,
+    justifyContent: 'center' as const,
     paddingHorizontal: 6,
-    paddingVertical: 1,
+  },
+  invoiceButton: {
+    alignItems: 'center' as const,
+    borderColor: p.border,
+    borderWidth: 1,
+    flexDirection: 'row' as const,
+    gap: 5,
+    height: 22,
+    paddingHorizontal: 6,
+  },
+  invoiceButtonText: {
+    color: p.muted,
+    fontFamily: fonts.sansMedium,
+    fontSize: 11,
   },
   statusText: {
     fontFamily: fonts.sansMedium,
@@ -108,6 +135,72 @@ const makeStyles = (p: Palette) => ({
     fontSize: 11,
     marginTop: 2,
   },
+  backdrop: {
+    alignItems: 'center' as const,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    flex: 1,
+    justifyContent: 'center' as const,
+    padding: 16,
+  },
+  card: {
+    backgroundColor: p.surface,
+    borderColor: p.border,
+    borderWidth: 1,
+    maxWidth: 384,
+    padding: 24,
+    width: '100%' as const,
+  },
+  hairline: {
+    backgroundColor: p.accent,
+    height: 1,
+    left: 0,
+    position: 'absolute' as const,
+    right: 0,
+    top: 0,
+  },
+  dialogHead: {
+    alignItems: 'flex-start' as const,
+    flexDirection: 'row' as const,
+    gap: 12,
+  },
+  dialogBadge: {
+    alignItems: 'center' as const,
+    backgroundColor: p.skySoft,
+    height: 36,
+    justifyContent: 'center' as const,
+    width: 36,
+  },
+  dialogTitle: {
+    color: p.text,
+    fontFamily: fonts.sansSemiBold,
+    fontSize: 16,
+  },
+  dialogSubtitle: {
+    color: p.muted,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  dialogAmount: {
+    color: p.text,
+    fontFamily: fonts.monoMedium,
+    fontSize: 16,
+  },
+  dialogUnit: {
+    color: p.muted,
+    fontFamily: fonts.mono,
+    fontSize: 12,
+  },
+  dialogQr: {
+    alignItems: 'center' as const,
+    marginTop: 20,
+  },
+  dialogCopy: {
+    marginTop: 20,
+  },
+  dialogActions: {
+    marginTop: 24,
+  },
 });
 
 // ActivityRow renders a single dense transaction line from an SDK Entry. The
@@ -127,6 +220,11 @@ export function ActivityRow({ entry }: { entry: Entry }) {
   const incoming = entry.kind === 'receive' || entry.kind === 'deposit';
   const failed = entry.status === 'failed';
   const pending = entry.status === 'pending';
+  const invoice =
+    entry.kind === 'receive' && pending && entry.request?.type === 'lightning'
+      ? entry.request.lightningInvoice
+      : '';
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
   const sign = incoming ? '+' : '-';
   const title =
     entry.note ||
@@ -168,12 +266,26 @@ export function ActivityRow({ entry }: { entry: Entry }) {
           </Text>
         ) : null}
         {pending || failed ? (
-          <View
-            style={[styles.status, { backgroundColor: statusBg, borderColor: statusColor }]}
-          >
-            <Text style={[styles.statusText, { color: statusColor }]}>
-              {entry.status}
-            </Text>
+          <View style={styles.chips}>
+            <View
+              style={[styles.status, { backgroundColor: statusBg, borderColor: statusColor }]}
+            >
+              <Text style={[styles.statusText, { color: statusColor }]}>
+                {entry.status}
+              </Text>
+            </View>
+            {invoice ? (
+              <Pressable
+                onPress={() => setInvoiceOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Show invoice"
+                hitSlop={6}
+                style={styles.invoiceButton}
+              >
+                <QrCode size={12} color={palette.muted} />
+                <Text style={styles.invoiceButtonText}>Invoice</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -186,6 +298,69 @@ export function ActivityRow({ entry }: { entry: Entry }) {
           <Text style={styles.fee}>fee {formatSats(entry.feeSat)}</Text>
         ) : null}
       </View>
+      {invoice ? (
+        <InvoiceDialog
+          open={invoiceOpen}
+          invoice={invoice}
+          amountSat={entry.amountSat ?? 0}
+          onClose={() => setInvoiceOpen(false)}
+        />
+      ) : null}
     </View>
+  );
+}
+
+// InvoiceDialog re-presents a pending Lightning receive the way the Receive
+// screen first showed it (amount, QR, copyable invoice), so a payer can still
+// be handed the request after the user has navigated away.
+function InvoiceDialog({
+  open,
+  invoice,
+  amountSat,
+  onClose,
+}: {
+  open: boolean;
+  invoice: string;
+  amountSat: number;
+  onClose: () => void;
+}) {
+  const { palette } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+
+  return (
+    <Modal
+      visible={open}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable style={styles.card} onPress={() => undefined}>
+          <View style={styles.hairline} />
+          <View style={styles.dialogHead}>
+            <View style={styles.dialogBadge}>
+              <Zap size={18} color={palette.sky} />
+            </View>
+            <View style={styles.main}>
+              <Text style={styles.dialogTitle}>Lightning invoice</Text>
+              <Text style={styles.dialogSubtitle}>Waiting for payment</Text>
+            </View>
+            <Text style={styles.dialogAmount}>
+              {formatSats(Math.abs(amountSat))}
+              <Text style={styles.dialogUnit}> sats</Text>
+            </Text>
+          </View>
+          <View style={styles.dialogQr}>
+            <QRCode value={invoice} size={160} />
+          </View>
+          <View style={styles.dialogCopy}>
+            <CopyRow label="Invoice" value={invoice} />
+          </View>
+          <View style={styles.dialogActions}>
+            <GhostButton onPress={onClose}>Close</GhostButton>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }

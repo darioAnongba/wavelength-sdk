@@ -90,6 +90,7 @@ test("wallet create and address state persist with OPFS SQLite", async ({
   await page.getByLabel("Amount (sats)").fill("1000");
   await page.getByRole("button", { name: "Create invoice" }).click();
   await expect(page.getByText(/lnbcrt/)).toBeVisible({ timeout: 60000 });
+  const invoice = await page.getByText(/lnbcrt/).textContent();
 
   // List(ACTIVITY) reads from the daemon's canonical activity store, which
   // records a receive as a pending entry as soon as its invoice is created,
@@ -104,6 +105,21 @@ test("wallet create and address state persist with OPFS SQLite", async ({
     timeout: 30000,
   });
   await expect(page.getByText("waiting for payment").first()).toBeVisible();
+
+  // Leaving Receive must not lose access to the original invoice. Expand its
+  // activity row with the keyboard and verify copying preserves the full value.
+  const receiveRow = page.getByTestId("activity-row").filter({ hasText: "Received" });
+  const viewInvoice = receiveRow.getByText("View invoice", { exact: true });
+  await expect(receiveRow.getByText(invoice, { exact: true })).toBeHidden();
+  await viewInvoice.focus();
+  await page.keyboard.press("Enter");
+  await expect(receiveRow.getByText(invoice, { exact: true })).toBeVisible();
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await receiveRow.getByRole("button", { name: "Copy", exact: true }).click();
+  await expect(receiveRow.getByRole("button", { name: "Copied" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(invoice);
+  await viewInvoice.click();
+  await expect(receiveRow.getByText(invoice, { exact: true })).toBeHidden();
 
   await testInfo.attach("dashboard", {
     body: await page.screenshot({ fullPage: true }),
@@ -137,6 +153,11 @@ test("wallet create and address state persist with OPFS SQLite", async ({
   await expect(accountChip).toBeVisible({ timeout: 60000 });
   const reloadedIdentity = await accountChip.getAttribute("data-pubkey");
   expect(reloadedIdentity).toBe(identity);
+
+  // Home uses the same activity row. The invoice must still be recoverable
+  // from persisted activity after reloading and unlocking the wallet.
+  await page.getByText("View invoice", { exact: true }).click();
+  await expect(page.getByText(invoice, { exact: true })).toBeVisible();
 
   await testInfo.attach("unlock-dashboard", {
     body: await page.screenshot({ fullPage: true }),

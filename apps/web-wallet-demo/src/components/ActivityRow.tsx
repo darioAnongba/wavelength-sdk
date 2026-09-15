@@ -9,6 +9,7 @@ import {
 import { Entry } from "@lightninglabs/wavelength-react";
 import { cn } from "../lib/cn";
 import { formatSats, formatTimestamp, shortKey } from "../lib/format";
+import { CopyRow } from "./ui/CopyRow";
 
 const KIND_ICON: Record<string, LucideIcon> = {
   receive: ArrowDownLeft,
@@ -66,6 +67,11 @@ export function ActivityRow({ entry }: { entry: Entry }) {
   const incoming = entry.kind === "receive" || entry.kind === "deposit";
   const failed = entry.status === "failed";
   const pending = entry.status === "pending";
+  const invoice =
+    entry.kind === "receive" && pending &&
+    entry.request?.type === "lightning"
+      ? entry.request.lightningInvoice
+      : "";
   const sign = incoming ? "+" : "-";
   const title =
     entry.note ||
@@ -77,60 +83,71 @@ export function ActivityRow({ entry }: { entry: Entry }) {
     : "";
 
   return (
-    <div
-      data-testid="activity-row"
-      className="flex items-center gap-3 py-3"
-    >
-      <div
-        className="flex h-9 w-9 shrink-0 items-center justify-center border
-          border-border"
-      >
-        <Icon size={15} className={incoming ? "text-sky" : "text-orange"} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-fg">{title}</div>
-        {entry.counterparty ? (
-          <div className="truncate font-mono text-xs text-muted">
-            {shortKey(entry.counterparty, 10, 6)}
-            {time ? ` · ${time}` : ""}
-          </div>
-        ) : time ? (
-          <div className="truncate font-mono text-xs text-muted">{time}</div>
-        ) : null}
-        {failed && entry.failureReason ? (
-          <div className="truncate text-xs text-bad">{entry.failureReason}</div>
-        ) : null}
-        {phase ? (
-          <div className="truncate text-xs text-muted">{phase}</div>
-        ) : null}
-      </div>
-      <div className="hidden sm:block">
-        <span
-          className={cn(
-            `border px-2 py-0.5 text-[10px] font-medium uppercase
-            tracking-wide`,
-            STATUS_CLASS[entry.status] ?? "border-border text-muted",
-          )}
-        >
-          {entry.status}
-        </span>
-      </div>
-      <div className="text-right">
+    <div data-testid="activity-row" className="py-3">
+      <div className="flex items-center gap-3">
         <div
-          className={cn(
-            "text-sm font-medium tabular-nums font-mono",
-            failed ? "text-faint" : incoming ? "text-good" : "text-fg",
-          )}
+          className="flex h-9 w-9 shrink-0 items-center justify-center border
+            border-border"
         >
-          {sign}
-          {formatSats(Math.abs(entry.amountSat ?? 0))}
+          <Icon size={15} className={incoming ? "text-sky" : "text-orange"} />
         </div>
-        {entry.feeSat && entry.feeSat > 0 ? (
-          <div className="font-mono text-[11px] tabular-nums text-faint">
-            fee {formatSats(entry.feeSat)}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-fg">{title}</div>
+          {entry.counterparty ? (
+            <div className="truncate font-mono text-xs text-muted">
+              {shortKey(entry.counterparty, 10, 6)}
+              {time ? ` · ${time}` : ""}
+            </div>
+          ) : time ? (
+            <div className="truncate font-mono text-xs text-muted">{time}</div>
+          ) : null}
+          {failed && entry.failureReason ? (
+            <div className="truncate text-xs text-bad">{entry.failureReason}</div>
+          ) : null}
+          {phase ? (
+            <div className="truncate text-xs text-muted">{phase}</div>
+          ) : null}
+        </div>
+        <div className="hidden sm:block">
+          <span
+            className={cn(
+              `border px-2 py-0.5 text-[10px] font-medium uppercase
+              tracking-wide`,
+              STATUS_CLASS[entry.status] ?? "border-border text-muted",
+            )}
+          >
+            {entry.status}
+          </span>
+        </div>
+        <div className="text-right">
+          <div
+            className={cn(
+              "text-sm font-medium tabular-nums font-mono",
+              failed ? "text-faint" : incoming ? "text-good" : "text-fg",
+            )}
+          >
+            {sign}
+            {formatSats(Math.abs(entry.amountSat ?? 0))}
           </div>
-        ) : null}
+          {entry.feeSat && entry.feeSat > 0 ? (
+            <div className="font-mono text-[11px] tabular-nums text-faint">
+              fee {formatSats(entry.feeSat)}
+            </div>
+          ) : null}
+        </div>
       </div>
+      {invoice ? (
+        <details className="mt-2 min-w-0">
+          <summary
+            className="cursor-pointer text-xs font-medium text-accent"
+          >
+            View invoice
+          </summary>
+          <div className="mt-3">
+            <CopyRow label="Invoice" value={invoice} />
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
